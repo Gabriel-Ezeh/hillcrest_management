@@ -4,6 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:hillcrest_finance/features/investment/presentation/providers/investment_providers.dart';
 import 'package:hillcrest_finance/utils/constants/values.dart';
+import 'package:hillcrest_finance/app/core/services/paystack_payment_service.dart';
+import 'package:hillcrest_finance/app/core/providers/user_local_storage_provider.dart';
+import 'package:hillcrest_finance/app/core/providers/networking_provider.dart';
 import 'package:intl/intl.dart';
 import '../../data/models/investment_scheme.dart';
 
@@ -234,16 +237,16 @@ class _InvestNowScreenState extends ConsumerState<InvestNowScreen> {
                   _showBankTransferDialog();
                 },
               ),
-              const SpaceH12(),
-              _buildPaymentMethodTile(
-                icon: Icons.credit_card_rounded,
-                title: 'Card Payment',
-                subtitle: 'Pay securely with your debit card',
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  _showCardComingSoonDialog();
-                },
-              ),
+               const SpaceH12(),
+               _buildPaymentMethodTile(
+                 icon: Icons.credit_card_rounded,
+                 title: 'Pay with Paystack',
+                 subtitle: 'Pay securely with your debit card via Paystack',
+                 onTap: () {
+                   Navigator.pop(sheetContext);
+                   _processPaystackPayment();
+                 },
+               ),
             ],
           ),
         );
@@ -296,35 +299,261 @@ class _InvestNowScreenState extends ConsumerState<InvestNowScreen> {
     );
   }
 
-  void _showCardComingSoonDialog() {
+  void _processPaystackPayment() async {
+    if (!mounted) return;
+
+    // Show loading dialog
     showDialog(
       context: context,
+      barrierDismissible: false,
+      builder: (ctx) => const Center(child: CircularProgressIndicator()),
+    );
+
+    try {
+      // Get user information from local storage
+      final userLocalStorage = ref.read(userLocalStorageProvider);
+      final authRepo = ref.read(authRepositoryProvider);
+
+      // Get username to fetch user details
+      final username = userLocalStorage.getUsername();
+      if (username == null) {
+        if (mounted) Navigator.pop(context); // Remove loading
+        _showErrorDialog('User information not found. Please login again.');
+        return;
+      }
+
+      // Fetch user details from Keycloak
+      late String userEmail;
+      try {
+        final userStatus = await authRepo.getUserOnboardingStatus(username);
+        final user = userStatus['user'] as dynamic;
+
+        userEmail = user?.email ?? '';
+
+        if (userEmail.isEmpty) {
+          if (mounted) Navigator.pop(context);
+          _showErrorDialog('User email not found. Please update your profile.');
+          return;
+        }
+      } catch (e) {
+        if (mounted) Navigator.pop(context);
+        _showErrorDialog('Failed to fetch user information: $e');
+        return;
+      }
+
+      // Generate transaction reference
+      final transactionRef = PaystackPaymentService.generateTransactionReference();
+      print('💳 [INVEST_NOW] Generated transaction reference: $transactionRef');
+
+      // Remove loading dialog
+      if (mounted) Navigator.pop(context);
+
+      await _completePaystackPayment(
+        transactionRef: transactionRef,
+        userEmail: userEmail,
+      );
+    } catch (e) {
+      if (mounted) Navigator.pop(context);
+      print('❌ [INVEST_NOW] Error in payment initiation: $e');
+      _showErrorDialog('An error occurred: $e');
+    }
+  }
+
+  Future<void> _completePaystackPayment({
+    required String transactionRef,
+    required String userEmail,
+  }) async {
+    try {
+      final paymentOutcome = await PaystackPaymentService.processPayment(
+        context: context,
+        units: _unitsToBuy,
+        unitPrice: unitPrice,
+        email: userEmail,
+        reference: transactionRef,
+      );
+
+      if (!mounted) return;
+
+      if (paymentOutcome.status == PaystackPaymentStatus.cancelled) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Payment cancelled')),
+        );
+        return;
+      }
+
+      if (!paymentOutcome.isSuccess) {
+        _showErrorDialog(
+          'Unable to complete card payment. ${paymentOutcome.message ?? 'Please try again.'}',
+        );
+        return;
+      }
+
+      // Payment succeeded on Paystack; now create the investment purchase in backend.
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => const Center(child: CircularProgressIndicator()),
+      );
+
+      try {
+        await ref.read(
+          buyUnitsProvider((schemeId: schemeId, units: _unitsToBuy)).future,
+        );
+      } catch (e) {
+        if (mounted) Navigator.pop(context);
+        _showErrorDialog(
+          'Payment succeeded, but we could not create your investment units yet: $e\n\nReference: ${paymentOutcome.reference}',
+        );
+        return;
+      }
+
+      if (mounted) Navigator.pop(context);
+
+      // Local state update for immediate UI feedback.
+      ref.read(userPortfolioProvider.notifier).addUnits(_unitsToBuy);
+
+      if (mounted) {
+        _showPaymentSuccessDialog(
+          transactionRef: paymentOutcome.reference,
+        );
+      }
+    } catch (e) {
+      print('❌ [INVEST_NOW] Error in payment processing: $e');
+      _showErrorDialog('Payment processing error: $e');
+    }
+  }
+
+  void _showPaymentSuccessDialog({
+    required String transactionRef,
+  }) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
       builder: (dialogContext) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: Row(
           children: [
-            const Icon(
-              Icons.credit_card_rounded,
-              color: AppColors.primaryColor,
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: Colors.green.withOpacity(0.15),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.check_rounded, color: Colors.green),
             ),
-            const SpaceW8(),
-            Text('Card Payments', style: AppTextStyles.cabinBold18DarkBlue),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'Payment Successful!',
+                style: AppTextStyles.cabinBold18DarkBlue,
+              ),
+            ),
           ],
         ),
-        content: Text(
-          'Card payment is coming soon. For now, kindly use bank transfer to complete your investment.',
-          style: AppTextStyles.cabinRegular14MutedGray,
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Your investment of ${_formatCurrency(_totalPayableAmount)} has been processed successfully.',
+              style: AppTextStyles.cabinRegular14MutedGray.copyWith(height: 1.45),
+            ),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppColors.brandSoftGray,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _buildPaymentDetailRow(
+                    'Units Purchased',
+                    _formatIntegerWithCommas(_unitsToBuy.toString()),
+                  ),
+                  const SizedBox(height: 8),
+                  _buildPaymentDetailRow(
+                    'Amount Paid',
+                    _formatCurrency(_totalPayableAmount),
+                  ),
+                  const SizedBox(height: 8),
+                  _buildPaymentDetailRow(
+                    'Payment Reference',
+                    transactionRef,
+                    isSmall: true,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Your units have been added to your portfolio immediately. You can view them in the "My Portfolio" section.',
+              style: AppTextStyles.cabinRegular14MutedGray.copyWith(
+                fontSize: 12,
+                height: 1.4,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Paystack may also send a payment receipt to your email based on your Paystack dashboard settings.',
+              style: AppTextStyles.cabinRegular14MutedGray.copyWith(
+                fontSize: 12,
+                height: 1.4,
+              ),
+            ),
+          ],
         ),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
+          ElevatedButton(
+            onPressed: () {
+              _inputController.clear();
+              Navigator.pop(dialogContext);
+              Navigator.pop(context); // Go back to investment screen
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primaryColor,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+            ),
             child: const Text(
-              'Got it',
-              style: TextStyle(color: AppColors.primaryColor),
+              'Done',
+              style: TextStyle(color: Colors.white),
             ),
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildPaymentDetailRow(
+    String label,
+    String value, {
+    bool isSmall = false,
+  }) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(
+          label,
+          style: isSmall
+              ? AppTextStyles.cabinRegular14MutedGray.copyWith(fontSize: 11)
+              : AppTextStyles.cabinRegular14MutedGray,
+        ),
+        Flexible(
+          child: Text(
+            value,
+            textAlign: TextAlign.end,
+            style: isSmall
+                ? AppTextStyles.cabinBold14DarkBlue.copyWith(fontSize: 11)
+                : AppTextStyles.cabinBold16DarkBlue,
+            overflow: TextOverflow.ellipsis,
+            maxLines: isSmall ? 1 : 2,
+          ),
+        ),
+      ],
     );
   }
 
@@ -438,7 +667,7 @@ class _InvestNowScreenState extends ConsumerState<InvestNowScreen> {
                     const Center(child: CircularProgressIndicator()),
               );
               try {
-                final transaction = await ref.read(
+                await ref.read(
                   buyUnitsProvider((
                     schemeId: schemeId,
                     units: _unitsToBuy,

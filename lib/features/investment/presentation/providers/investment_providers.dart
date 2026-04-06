@@ -1,10 +1,26 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:hillcrest_finance/app/core/providers/networking_provider.dart';
 import 'package:hillcrest_finance/app/core/providers/user_local_storage_provider.dart';
-import 'package:hillcrest_finance/features/authentication/presentation/providers/auth_state_provider.dart';
 import '../../data/models/investment_scheme.dart';
 import '../../data/models/investor_transaction.dart';
 import '../../data/models/portfolio_holding.dart';
+
+class UserPortfolioNotifier extends Notifier<int> {
+  @override
+  int build() => 0;
+
+  void addUnits(int units) {
+    if (units <= 0) return;
+    state = state + units;
+  }
+
+  void reset() => state = 0;
+}
+
+// Local optimistic portfolio unit balance for immediate UI updates after payment.
+final userPortfolioProvider = NotifierProvider<UserPortfolioNotifier, int>(
+  UserPortfolioNotifier.new,
+);
 
 String _formatIntegerWithCommas(String value) {
   if (value.isEmpty) return '0';
