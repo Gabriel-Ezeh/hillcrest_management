@@ -2,6 +2,7 @@ import 'package:auto_route/auto_route.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:hillcrest_finance/features/investment/presentation/providers/investment_providers.dart';
 import 'package:hillcrest_finance/utils/constants/values.dart';
 import 'package:intl/intl.dart';
 import '../../data/models/investment_scheme.dart';
@@ -40,9 +41,10 @@ class _InvestNowScreenState extends ConsumerState<InvestNowScreen> {
   late double unitPrice;
   late String schemeId;
 
-  static const String _bankName = 'Hillcrest Finance Collection Account';
-  static const String _bank = 'Wema Bank';
-  static const String _accountNumber = '0134059287';
+  static const String _bankName =
+      'UBA NOM STL TRUSTEES LTD HILLCREST BALANCED FUND';
+  static const String _bank = 'UBA';
+  static const String _accountNumber = '1026978885';
 
   @override
   void initState() {
@@ -427,9 +429,28 @@ class _InvestNowScreenState extends ConsumerState<InvestNowScreen> {
             ),
           ),
           ElevatedButton(
-            onPressed: () {
-              Navigator.pop(dialogContext);
-              _showTransferConfirmationDialog();
+            onPressed: () async {
+              // Show loading dialog
+              showDialog(
+                context: context,
+                barrierDismissible: false,
+                builder: (ctx) =>
+                    const Center(child: CircularProgressIndicator()),
+              );
+              try {
+                final transaction = await ref.read(
+                  buyUnitsProvider((
+                    schemeId: schemeId,
+                    units: _unitsToBuy,
+                  )).future,
+                );
+                Navigator.pop(context); // Remove loading
+                Navigator.pop(dialogContext); // Remove bank transfer dialog
+                _showTransferConfirmationDialog();
+              } catch (e) {
+                Navigator.pop(context); // Remove loading
+                _showErrorDialog('Failed to submit transfer: ${e.toString()}');
+              }
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: AppColors.primaryColor,
@@ -924,7 +945,9 @@ class _InvestNowScreenState extends ConsumerState<InvestNowScreen> {
 class ThousandsSeparatorInputFormatter extends TextInputFormatter {
   @override
   TextEditingValue formatEditUpdate(
-      TextEditingValue oldValue, TextEditingValue newValue) {
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
     if (newValue.text.isEmpty) {
       return newValue.copyWith(text: '');
     }

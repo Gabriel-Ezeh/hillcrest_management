@@ -91,6 +91,22 @@ class FAQRoute extends PageRouteInfo<void> {
 }
 
 /// generated route for
+/// [FaceCaptureScreen]
+class FaceCaptureRoute extends PageRouteInfo<void> {
+  const FaceCaptureRoute({List<PageRouteInfo>? children})
+    : super(FaceCaptureRoute.name, initialChildren: children);
+
+  static const String name = 'FaceCaptureRoute';
+
+  static PageInfo page = PageInfo(
+    name,
+    builder: (data) {
+      return const FaceCaptureScreen();
+    },
+  );
+}
+
+/// generated route for
 /// [ForgotPasswordScreen]
 class ForgotPasswordRoute extends PageRouteInfo<void> {
   const ForgotPasswordRoute({List<PageRouteInfo>? children})
@@ -276,22 +292,6 @@ class InvestorTransactionsRoute extends PageRouteInfo<void> {
     name,
     builder: (data) {
       return const InvestorTransactionsScreen();
-    },
-  );
-}
-
-/// generated route for
-/// [LivenessCheckScreen]
-class LivenessCheckRoute extends PageRouteInfo<void> {
-  const LivenessCheckRoute({List<PageRouteInfo>? children})
-    : super(LivenessCheckRoute.name, initialChildren: children);
-
-  static const String name = 'LivenessCheckRoute';
-
-  static PageInfo page = PageInfo(
-    name,
-    builder: (data) {
-      return const LivenessCheckScreen();
     },
   );
 }

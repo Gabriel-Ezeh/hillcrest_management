@@ -2,8 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hillcrest_finance/utils/constants/validators/field_validators.dart';
 import 'package:hillcrest_finance/utils/constants/values.dart';
-// Import the part owner file 'values.dart' to get access to
-// AppBorders, AppTextStyles, AppColors, and Sizes.
 
 // Enum to define the style of text field content
 enum AppTextFieldType {
@@ -101,6 +99,12 @@ class _AppTextFieldState extends State<AppTextField> {
   String _passwordHint = '';
   Color _passwordIndicatorColor = Colors.transparent;
 
+  // Individual Validation States
+  bool _hasMinLength = false;
+  bool _hasUppercase = false;
+  bool _hasNumber = false;
+  bool _hasSpecialChar = false;
+
   // State for Dropdown Field
   String? _selectedDropdownValue;
 
@@ -115,6 +119,12 @@ class _AppTextFieldState extends State<AppTextField> {
       widget.originalPasswordController!.addListener(
         _revalidateConfirmPassword,
       );
+    }
+
+    if (widget.type == AppTextFieldType.password &&
+        widget.controller != null &&
+        widget.controller!.text.isNotEmpty) {
+      _checkPasswordStrength(widget.controller!.text);
     }
   }
 
@@ -134,7 +144,7 @@ class _AppTextFieldState extends State<AppTextField> {
 
   void _revalidateConfirmPassword() {
     if (mounted) {
-      (context as Element).markNeedsBuild();
+      setState(() {});
     }
   }
 
@@ -207,56 +217,111 @@ class _AppTextFieldState extends State<AppTextField> {
         widget.type != AppTextFieldType.password)
       return;
 
+    _hasMinLength = password.length >= 8;
+    _hasUppercase = password.contains(RegExp(r'[A-Z]'));
+    _hasNumber = password.contains(RegExp(r'[0-9]'));
+    _hasSpecialChar = password.contains(RegExp(r'[!@#$%^&*(),.?":{}|<>]'));
+
     double strength = 0.0;
-    if (password.length >= 8) strength += 0.3;
-    if (password.contains(RegExp(r'[A-Z]'))) strength += 0.3;
-    if (password.contains(RegExp(r'[0-9]'))) strength += 0.2;
-    if (password.contains(RegExp(r'[!@#$%^&*(),.?":{}|<>]'))) strength += 0.2;
+    if (_hasMinLength) strength += 0.25;
+    if (_hasUppercase) strength += 0.25;
+    if (_hasNumber) strength += 0.25;
+    if (_hasSpecialChar) strength += 0.25;
 
     setState(() {
       _passwordStrength = strength.clamp(0.0, 1.0);
       if (_passwordStrength == 1.0) {
         _passwordHint = 'Strong';
         _passwordIndicatorColor = AppColors.passwordStrong;
-      } else if (_passwordStrength >= 0.5) {
+      } else if (_passwordStrength >= 0.75) {
         _passwordHint = 'Medium';
         _passwordIndicatorColor = AppColors.primaryColor;
-      } else {
+      } else if (_passwordStrength >= 0.25) {
         _passwordHint = 'Weak';
         _passwordIndicatorColor = AppColors.red;
+      } else {
+        _passwordHint = '';
+        _passwordIndicatorColor = Colors.transparent;
       }
     });
   }
 
   // --- Build Methods ---
 
+  Widget _buildValidationRow(String text, bool isValid) {
+    return Row(
+      children: [
+        Icon(
+          isValid ? Icons.check_circle_rounded : Icons.circle_outlined,
+          color: isValid ? AppColors.passwordStrong : AppColors.mutedGray,
+          size: 14,
+        ),
+        const SpaceW8(),
+        Text(
+          text,
+          style: AppTextStyles.cabinRegular11mutedGray.copyWith(
+            color: isValid ? AppColors.passwordStrong : AppColors.mutedGray,
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildPasswordStrengthIndicator() {
     if (widget.type != AppTextFieldType.password ||
         !widget.showPasswordStrength) {
       return const SizedBox.shrink();
     }
+
+    final isVisible =
+        widget.controller != null && widget.controller!.text.isNotEmpty;
+
+    if (!isVisible) return const SizedBox.shrink();
+
     return Padding(
-      padding: const EdgeInsets.only(top: Sizes.PADDING_4),
+      padding: const EdgeInsets.only(top: Sizes.PADDING_12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          LinearProgressIndicator(
-            value: _passwordStrength,
-            backgroundColor: AppColors.lightGray.withOpacity(0.5),
-            valueColor: AlwaysStoppedAnimation<Color>(_passwordIndicatorColor),
-            minHeight: Sizes.RADIUS_8,
-          ),
-          if (_passwordHint.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(top: Sizes.PADDING_4),
-              child: Text(
-                'Strength: $_passwordHint',
-                style: AppTextStyles.cabinRegular11mutedGray.copyWith(
-                  color: _passwordIndicatorColor,
-                  fontWeight: FontWeight.w600,
-                ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Password Strength',
+                style: AppTextStyles.cabinRegular11mutedGray,
               ),
+              if (_passwordHint.isNotEmpty)
+                Text(
+                  _passwordHint,
+                  style: AppTextStyles.cabinRegular11mutedGray.copyWith(
+                    color: _passwordIndicatorColor,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+            ],
+          ),
+          const SpaceH8(),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(Sizes.RADIUS_4),
+            child: LinearProgressIndicator(
+              value: _passwordStrength,
+              backgroundColor: AppColors.lightGray.withOpacity(0.5),
+              valueColor:
+                  AlwaysStoppedAnimation<Color>(_passwordIndicatorColor),
+              minHeight: 6,
             ),
+          ),
+          const SpaceH12(),
+          Wrap(
+            spacing: Sizes.PADDING_16,
+            runSpacing: Sizes.PADDING_8,
+            children: [
+              _buildValidationRow('At least 8 characters', _hasMinLength),
+              _buildValidationRow('Uppercase letter', _hasUppercase),
+              _buildValidationRow('One number', _hasNumber),
+              _buildValidationRow('Special character', _hasSpecialChar),
+            ],
+          ),
         ],
       ),
     );

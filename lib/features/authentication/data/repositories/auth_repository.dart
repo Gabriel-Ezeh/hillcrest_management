@@ -13,6 +13,7 @@ import 'package:hillcrest_finance/features/authentication/data/models/token_resp
 import 'package:hillcrest_finance/features/authentication/data/sources/auth_api_client.dart';
 import 'package:hillcrest_finance/features/authentication/data/sources/otp_api_client.dart';
 import 'package:hillcrest_finance/features/authentication/presentation/providers/signup_data_provider.dart';
+import 'package:hillcrest_finance/features/kyc/data/models/bank.dart';
 import 'package:pretty_dio_logger/pretty_dio_logger.dart';
 
 import '../../../../app/core/providers/networking_provider.dart';
@@ -20,6 +21,7 @@ import '../../../../app/core/providers/networking_provider.dart';
 import 'package:hillcrest_finance/features/kyc/data/models/bvn_validation_request.dart';
 import 'package:hillcrest_finance/features/kyc/data/models/signup_retail_customer_request.dart';
 import 'package:hillcrest_finance/features/kyc/data/models/kyc_document_submission_request.dart';
+import 'package:hillcrest_finance/features/kyc/data/models/redeem_bank_info.dart';
 
 import '../../../kyc/data/sources/kyc_api_client.dart';
 
@@ -42,14 +44,13 @@ class AuthRepository {
     required FlutterSecureStorage secureStorage,
     required UserLocalStorage userLocalStorage,
     required Ref ref,
-  })  : _authApiClient = authApiClient,
-        _otpApiClient = otpApiClient,
-        _kycApiClient = kycApiClient,
-        _secureStorage = secureStorage,
-        _userLocalStorage = userLocalStorage,
-        _ref = ref,
-        _dio = ref.read(dioProvider) {
-
+  }) : _authApiClient = authApiClient,
+       _otpApiClient = otpApiClient,
+       _kycApiClient = kycApiClient,
+       _secureStorage = secureStorage,
+       _userLocalStorage = userLocalStorage,
+       _ref = ref,
+       _dio = ref.read(dioProvider) {
     _serviceDio = Dio(
       BaseOptions(
         // NOTE: Verify if your KYC service uses the same base URL as your Auth service.
@@ -66,13 +67,17 @@ class AuthRepository {
 
     // Add Logger Interceptor for easier debugging of the 404
     if (kDebugMode) {
-      _serviceDio.interceptors.add(PrettyDioLogger(
-        requestHeader: true,
-        requestBody: true,
-        responseHeader: true,
-        compact: false,
-      ));
-      print('[SERVICE_DIO] Initialized with BaseURL: ${_serviceDio.options.baseUrl}');
+      _serviceDio.interceptors.add(
+        PrettyDioLogger(
+          requestHeader: true,
+          requestBody: true,
+          responseHeader: true,
+          compact: false,
+        ),
+      );
+      print(
+        '[SERVICE_DIO] Initialized with BaseURL: ${_serviceDio.options.baseUrl}',
+      );
     }
   }
 
@@ -81,7 +86,10 @@ class AuthRepository {
   static const _kSavedUsername = "SAVED_LOGIN_USERNAME";
   // --- Full Sign-Up Flow ---
 
-  Future<void> checkIfUserExists({required String email, required String phoneNumber}) async {
+  Future<void> checkIfUserExists({
+    required String email,
+    required String phoneNumber,
+  }) async {
     try {
       final realm = dotenv.env['CC_REALM']!;
       final adminToken = await getAdminAuthToken();
@@ -134,9 +142,9 @@ class AuthRepository {
 
         page++;
       }
-
     } on DioException catch (e) {
-      if (e.type == DioExceptionType.connectionTimeout) throw TimeoutException();
+      if (e.type == DioExceptionType.connectionTimeout)
+        throw TimeoutException();
       throw ServerException();
     } catch (e) {
       if (e is NetworkException) rethrow;
@@ -144,35 +152,33 @@ class AuthRepository {
     }
   }
 
-
-
+  Future<String> _getOrFetchNeosToken() async {
+    String? token = await _secureStorage.read(key: 'NEOS_SERVICE_TOKEN');
+    if (token == null || token.isEmpty) {
+      token = await getNeosServiceToken();
+    }
+    if (token == null || token.isEmpty) {
+      throw ClientException(message: 'Authorization failed. Please try again.');
+    }
+    return token;
+  }
 
   Future<String> sendEmailOtp(String email) async {
-    try {
-      final tenantId = dotenv.env['xTenantId']!;
-      
-      // Use Neos service token for authorization
-      String? neosToken = await _secureStorage.read(key: 'NEOS_SERVICE_TOKEN');
-      if (neosToken == null || neosToken.isEmpty) {
-        neosToken = await getNeosServiceToken();
-      }
+    final tenantId = dotenv.env['xTenantId']!;
 
-      if (neosToken == null || neosToken.isEmpty) {
-        throw ClientException(message: 'Authorization failed. Please try again.');
-      }
-
+    Future<String> attempt(String token) async {
       print('📞 Calling generateEmailOtp API...');
       final otp = await _otpApiClient.generateEmailOtp(
         tenantId: tenantId,
-        token: 'Bearer $neosToken',
+        token: 'Bearer $token',
         email: email,
       );
       print('📥 Raw OTP from API: "$otp"');
-      print('📏 OTP length: ${otp.length}');
 
       final emailRequest = SendEmailRequest(
         attachments: [],
-        body: "Good day,\n\nThis is your One-time password for your online profile creation with Hillcrest Capital.\n\nPin: $otp", // Double quotes for interpolation
+        body:
+            "Good day,\n\nThis is your One-time password for your online profile creation with Hillcrest Capital.\n\nPin: $otp",
         from: "customerservice@hillcrestcapmgt.com",
         subject: "OTP Verification",
         to: email,
@@ -181,146 +187,230 @@ class AuthRepository {
       print('📧 Sending email with OTP in body...');
       await _otpApiClient.sendEmail(
         tenantId: tenantId,
-        token: 'Bearer $neosToken',
+        token: 'Bearer $token',
         body: emailRequest,
       );
-      print('✅ Email sent successfully');
+      return otp.trim();
+    }
 
-      return otp.trim(); // Return trimmed OTP to remove any whitespace
+    try {
+      final token = await _getOrFetchNeosToken();
+      return await attempt(token);
     } on DioException catch (e) {
-      print('❌ DioException: ${e.message}');
       if (e.response?.statusCode == 401) {
-         // Clear token on 401 to force refresh on next try
-         await _secureStorage.delete(key: 'NEOS_SERVICE_TOKEN');
+        print('[AUTH] Token expired, retrying with fresh token...');
+        await _secureStorage.delete(key: 'NEOS_SERVICE_TOKEN');
+        final freshToken = await getNeosServiceToken();
+        if (freshToken != null) {
+          return await attempt(freshToken);
+        }
       }
+      print('❌ DioException: ${e.message}');
       throw ClientException(
-          message: 'Failed to send email OTP. Please check the address and try again.');
+        message:
+            'Failed to send email OTP. Please check the address and try again.',
+      );
     } catch (e) {
       print('❌ Unexpected error: $e');
       throw UnexpectedException();
     }
   }
 
-  Future<void> verifyEmailOtp(String email, String otp) async {
-    // try {
-    //   final tenantId = dotenv.env['xTenantId']!;
-    //   final adminToken = await _getAdminAuthToken();
-    //
-    //   await _otpApiClient.validateOtp(
-    //     tenantId: tenantId,
-    //     authorization: 'Bearer $adminToken',
-    //     userId: email,
-    //     otp: otp,
-    //   );
-    // } on DioException catch (e) {
-    //   if (e.response?.statusCode == 401) {
-    //     throw ClientException(message: 'The OTP you entered is incorrect.');
-    //   }
-    //   throw ServerException();
-    // } catch (e) {
-    //   if (e is NetworkException) rethrow;
-    //   throw UnexpectedException();
-    // }
-  }
-
   Future<void> sendSmsOtp(String phoneNumber) async {
-    try {
-      final tenantId = dotenv.env['xTenantId']!;
-      
-      // Use Neos service token for authorization
-      String? neosToken = await _secureStorage.read(key: 'NEOS_SERVICE_TOKEN');
-      if (neosToken == null || neosToken.isEmpty) {
-        neosToken = await getNeosServiceToken();
-      }
+    final tenantId = dotenv.env['xTenantId']!;
 
-      if (neosToken == null || neosToken.isEmpty) {
-        throw ClientException(message: 'Authorization failed. Please try again.');
-      }
-
+    Future<void> attempt(String token) async {
       print('Generating OTP for phone: $phoneNumber');
       final otp = await _otpApiClient.generateEmailOtp(
         tenantId: tenantId,
-        token: 'Bearer $neosToken',
+        token: 'Bearer $token',
         email: phoneNumber,
       );
-      print('OTP generated successfully: $otp');
 
       print('Sending SMS to: $phoneNumber');
       final response = await _otpApiClient.sendSmsOtp(
         tenantId: tenantId,
         message: otp,
         phoneNumber: phoneNumber,
-        token: 'Bearer $neosToken',
+        token: 'Bearer $token',
       );
-
-      print('SMS sent successfully: ${response.sentOK}');
 
       if (!response.sentOK) {
         throw ClientException(
           message: 'SMS service failed to send the message.',
         );
       }
+    }
 
+    try {
+      final token = await _getOrFetchNeosToken();
+      await attempt(token);
     } on DioException catch (e) {
-      print('DioException: Status ${e.response?.statusCode}');
-
       if (e.response?.statusCode == 401) {
+        print('[AUTH] Token expired, retrying with fresh token...');
         await _secureStorage.delete(key: 'NEOS_SERVICE_TOKEN');
-        throw ClientException(
-          message: 'Authentication failed. Verify your credentials.',
-        );
+        final freshToken = await getNeosServiceToken();
+        if (freshToken != null) {
+          return await attempt(freshToken);
+        }
       }
-
       throw ClientException(
         message: 'Failed to send SMS OTP. Please try again.',
       );
     } catch (e) {
-      print('Unexpected error: $e');
       throw UnexpectedException();
     }
   }
 
-  Future<void> verifySmsOtp(String phoneNumber, String otp) async {
-    // try {
-    //   final tenantId = dotenv.env['xTenantId']!;
-    //   final adminToken = await _getAdminAuthToken();
-    //
-    //   final response = await _otpApiClient.validateOtp(
-    //     tenantId: tenantId,
-    //     authorization: 'Bearer $adminToken',
-    //     userId: phoneNumber,
-    //     otp: otp,
-    //   );
-    //
-    //   print('Validation Response Status: ${response.response.statusCode}');
-    //   print('Validation Response Body: ${response.data}');
-    //
-    //   if (response.response.statusCode != 200 && response.response.statusCode != 201) {
-    //     throw ClientException(message: 'The OTP you entered is incorrect.');
-    //   }
-    //
-    // } on DioException catch (e) {
-    //   print('DioException during OTP validation:');
-    //   print('Status Code: ${e.response?.statusCode}');
-    //   print('Response: ${e.response?.data}');
-    //
-    //   if (e.response?.statusCode == 401) {
-    //     throw ClientException(message: 'The OTP you entered is incorrect.');
-    //   }
-    //   throw ServerException();
-    // } catch (e) {
-    //   print('Unexpected error during validation: $e');
-    //   if (e is NetworkException) rethrow;
-    //   throw UnexpectedException();
-    // }
+  /// Validate BVN with the KYC service
+  Future<void> validateBvn({
+    required String bvn,
+    required String firstName,
+    required String lastName,
+    required String dateOfBirth,
+    required String tenantId,
+  }) async {
+    final request = BvnValidationRequest(
+      bvn: bvn,
+      firstname: firstName,
+      lastname: lastName,
+      dob: dateOfBirth,
+    );
+
+    Future<void> attempt(String token) async {
+      await _kycApiClient.validateBvn(tenantId, 'Bearer $token', request);
+    }
+
+    try {
+      final token = await _getOrFetchNeosToken();
+      await attempt(token);
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _secureStorage.delete(key: 'NEOS_SERVICE_TOKEN');
+        final freshToken = await getNeosServiceToken();
+        if (freshToken != null) {
+          return await attempt(freshToken);
+        }
+      }
+      if (e.response?.statusCode == 400) {
+        throw ClientException(
+          message: 'Invalid BVN. Please check and try again.',
+        );
+      } else if (e.response?.statusCode == 404) {
+        throw ClientException(message: 'BVN not found in the system.');
+      }
+      throw ServerException();
+    } catch (e) {
+      if (e is NetworkException) rethrow;
+      throw UnexpectedException();
+    }
   }
 
+  /// Submit personal information to create a retail customer
+  Future<String?> submitPersonalInfo({
+    required String customerType,
+    required String customerCategory,
+    required String firstName,
+    required String? middleName,
+    required String lastName,
+    required String gender,
+    required String dateOfBirth,
+    required String maritalStatus,
+    required String phoneNumber,
+    required String email,
+    required String bvn,
+    required String address,
+    required String city,
+    required String? nin,
+    required String? tin,
+    String? bankers,
+    String? bankAccountNo,
+    String? bankAccountName,
+    String? bankCode,
+    String? bankName,
+  }) async {
+    final tenantId = dotenv.env['xTenantId']!;
+    final request = SignupRetailCustomerRequest(
+      customerType: customerType,
+      customerCategory: customerCategory,
+      firstName: firstName,
+      middleName: middleName,
+      lastName: lastName,
+      gender: gender,
+      dob: dateOfBirth,
+      maritalStatus: maritalStatus,
+      phoneRef: phoneNumber,
+      email: email,
+      bvn: bvn,
+      address: address,
+      city: city,
+      nin: nin,
+      tin: tin,
+      idempotentKey: DateTime.now().millisecondsSinceEpoch.toString(),
+      tenantId: tenantId,
+      bankers: bankers,
+      bankAccountNo: bankAccountNo,
+      bankAccountName: bankAccountName,
+      bankCode: bankCode,
+      bankName: bankName,
+    );
 
+    Future<String?> attempt(String token) async {
+      final response = await _kycApiClient.signupRetailCustomer(
+        tenantId,
+        'Bearer $token',
+        request,
+      );
+
+      String? customerNo;
+      if (response.data is Map<String, dynamic>) {
+        final map = response.data as Map<String, dynamic>;
+        customerNo = (map['customerNo'] ?? map['customerno'])?.toString();
+      }
+      return customerNo;
+    }
+
+    try {
+      final token = await _getOrFetchNeosToken();
+      return await attempt(token);
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _secureStorage.delete(key: 'NEOS_SERVICE_TOKEN');
+        final freshToken = await getNeosServiceToken();
+        if (freshToken != null) {
+          return await attempt(freshToken);
+        }
+      }
+      if (e.response?.statusCode == 400) {
+        throw ClientException(
+          message: 'Invalid information provided. Please check your details.',
+        );
+      } else if (e.response?.statusCode == 409) {
+        throw ClientException(
+          message: 'A customer record already exists with this information.',
+        );
+      }
+      throw ServerException();
+    } catch (e) {
+      if (e is NetworkException) rethrow;
+      throw UnexpectedException();
+    }
+  }
+
+  Future<void> verifyEmailOtp(String email, String otp) async {
+    // Implementation for verifyEmailOtp
+  }
+
+  Future<void> verifySmsOtp(String phoneNumber, String otp) async {
+    // Implementation for verifySmsOtp
+  }
 
   Future<void> createKeycloakUser() async {
     final signUpData = _ref.read(signUpDataProvider);
     if (signUpData == null) {
-      throw UnexpectedException(message: "Could not retrieve user data to create account.");
+      throw UnexpectedException(
+        message: "Could not retrieve user data to create account.",
+      );
     }
 
     try {
@@ -332,8 +422,11 @@ class AuthRepository {
         lastName: signUpData.lastName,
         enabled: true,
         emailVerified: true, // MODIFIED: Set email as verified
-        credentials: [KeycloakCredential(type: 'password', value: signUpData.password)],
-        attributes: { // MODIFIED: Correctly pass all attributes
+        credentials: [
+          KeycloakCredential(type: 'password', value: signUpData.password),
+        ],
+        attributes: {
+          // MODIFIED: Correctly pass all attributes
           'phoneNumber': signUpData.phoneNumber,
           'accountType': signUpData.accountType,
         },
@@ -345,9 +438,11 @@ class AuthRepository {
       );
 
       await _userLocalStorage.saveUsername(signUpData.username);
-
     } on DioException catch (e) {
-      if (e.response?.data['errorMessage']?.toString().contains('already exists') ?? false) {
+      if (e.response?.data['errorMessage']?.toString().contains(
+            'already exists',
+          ) ??
+          false) {
         throw UserAlreadyExistsException();
       }
       throw ServerException();
@@ -394,7 +489,8 @@ class AuthRepository {
       print('[AUTH] Available Keys: ${attributes.keys.toList()}');
 
       // Step 3: Extract CustomerNo (Case-Insensitive Check)
-      dynamic customerNoValue = attributes['customerNo'] ?? attributes['CustomerNo'];
+      dynamic customerNoValue =
+          attributes['customerNo'] ?? attributes['CustomerNo'];
 
       String? finalCustomerNo;
       bool hasCustomerNo = false;
@@ -412,8 +508,8 @@ class AuthRepository {
       }
 
       // Step 4: Extract AccountType (Case-Insensitive Check)
-      dynamic accountTypeValue = attributes['accountType'] ?? attributes['AccountType'];
-      String? finalAccountType;
+      dynamic accountTypeValue =
+          attributes['accountType'] ?? attributes['AccountType']; String? finalAccountType;
 
       if (accountTypeValue != null) {
         if (accountTypeValue is List && accountTypeValue.isNotEmpty) {
@@ -423,7 +519,9 @@ class AuthRepository {
         }
       }
 
-      print('[AUTH] ✅ Sync Result - hasCustomerNo: $hasCustomerNo, customerNo: $finalCustomerNo, accountType: $finalAccountType');
+      print(
+        '[AUTH] ✅ Sync Result - hasCustomerNo: $hasCustomerNo, customerNo: $finalCustomerNo, accountType: $finalAccountType',
+      );
       print('[AUTH] User Name found: ${user.firstName} ${user.lastName}');
       print('[AUTH] === ONBOARDING SYNC COMPLETE ===\n');
 
@@ -431,9 +529,9 @@ class AuthRepository {
         'hasCustomerNo': hasCustomerNo,
         'customerNo': finalCustomerNo,
         'accountType': finalAccountType,
-        'user': user, // Included the user object so the Notifier can save it to state
+        'user':
+            user, // Included the user object so the Notifier can save it to state
       };
-
     } catch (e, stackTrace) {
       print('[AUTH] ❌ Error in getUserOnboardingStatus: $e');
       print('[AUTH] Stack trace: $stackTrace');
@@ -445,12 +543,12 @@ class AuthRepository {
       };
     }
   }
-// Keep the old method for backward compatibility if needed
+
+  // Keep the old method for backward compatibility if needed
   Future<bool> checkForCustomerNo(String username) async {
     final status = await getUserOnboardingStatus(username);
     return status['hasCustomerNo'] as bool;
   }
-
 
   // --- NEW FORGOT PASSWORD METHOD --- //
   Future<void> forgotPassword(String email) async {
@@ -483,7 +581,6 @@ class AuthRepository {
       );
 
       print('[AUTH] Password reset email sent to: $email');
-
     } on DioException {
       // Even on a server error, we don't want to let the user know if the email exists or not.
       // We can log the error for debugging, but we won't rethrow it to the UI.
@@ -493,6 +590,171 @@ class AuthRepository {
     }
   }
 
+  // --- BANKS & ACCOUNT LOOKUP --- //
+  List<Bank>? _cachedBanks;
+
+  /// Fetch all banks (with in-memory caching and retry)
+  Future<List<Bank>> getAllBanks() async {
+    if (_cachedBanks != null) return _cachedBanks!;
+
+    final tenantId = dotenv.env['xTenantId']!;
+
+    Future<List<Bank>> attempt(String token) async {
+      return await _kycApiClient.getAllBanks(tenantId, 'Bearer $token');
+    }
+
+    try {
+      final token = await _getOrFetchNeosToken();
+      final banks = await attempt(token);
+      _cachedBanks = banks;
+      return banks;
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        print('[AUTH] Neos token expired during bank fetch, retrying...');
+        await _secureStorage.delete(key: 'NEOS_SERVICE_TOKEN');
+        final freshToken = await getNeosServiceToken();
+        if (freshToken != null) {
+          final banks = await attempt(freshToken);
+          _cachedBanks = banks;
+          return banks;
+        }
+      }
+      if (e.type == DioExceptionType.connectionTimeout)
+        throw TimeoutException();
+      throw NetworkException('Failed to fetch banks. Please try again.');
+    } catch (e) {
+      throw NetworkException('Failed to fetch banks. Please try again.');
+    }
+  }
+
+  /// Fetch redeem destination bank details by customer number.
+  ///
+  /// Flow:
+  /// 1) getCustomerDetailsV4 -> bankers, bankCode, bankAccountNo
+  /// 2) accountNameLookup (fallback if bankAccountName is empty)
+  Future<RedeemBankInfo> getRedeemBankInfo({required String customerNo}) async {
+    final tenantId = dotenv.env['xTenantId']!;
+
+    Future<RedeemBankInfo> attempt(String token) async {
+      final customerDetails = await _kycApiClient.getCustomerDetailsV4(
+        tenantId,
+        'Bearer $token',
+        customerNo,
+      );
+
+      final accountNumber = customerDetails.bankAccountNo.trim();
+      final bankCode = customerDetails.bankCode.trim();
+      final bankName = customerDetails.bankers.trim();
+
+      if (accountNumber.isEmpty || bankCode.isEmpty) {
+        throw NetworkException(
+          'Bank account details are not available for this customer.',
+        );
+      }
+
+      String accountName = (customerDetails.bankAccountName ?? '').trim();
+
+      if (accountName.isEmpty) {
+        final lookup = await _kycApiClient.accountNameLookup(
+          tenantId,
+          'Bearer $token',
+          'application/json',
+          accountNumber,
+          bankCode,
+        );
+        accountName = lookup.accountName.trim();
+      }
+
+      if (accountName.isEmpty) {
+        throw NetworkException(
+          'Account name not found. Please verify bank details.',
+        );
+      }
+
+      return RedeemBankInfo(
+        accountName: accountName,
+        accountNumber: accountNumber,
+        bankName: bankName.isEmpty ? 'Bank' : bankName,
+        bankCode: bankCode,
+      );
+    }
+
+    try {
+      final token = await _getOrFetchNeosToken();
+      return await attempt(token);
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        print('[AUTH] Neos token expired during customer bank fetch, retrying...');
+        await _secureStorage.delete(key: 'NEOS_SERVICE_TOKEN');
+        final freshToken = await getNeosServiceToken();
+        if (freshToken != null) {
+          return await attempt(freshToken);
+        }
+      }
+      if (e.type == DioExceptionType.connectionTimeout) {
+        throw TimeoutException();
+      }
+      throw NetworkException(
+        'Failed to fetch account details. Please try again.',
+      );
+    } catch (e) {
+      if (e is NetworkException) rethrow;
+      throw NetworkException(
+        'Failed to fetch account details. Please try again.',
+      );
+    }
+  }
+
+  /// Lookup account name by account number and bank code (with retry)
+  Future<String> lookupAccountName({
+    required String nuban,
+    required String bankCode,
+  }) async {
+    final tenantId = dotenv.env['xTenantId']!;
+
+    Future<String> attempt(String token) async {
+      final response = await _kycApiClient.accountNameLookup(
+        tenantId,
+        'Bearer $token',
+        'application/json',
+        nuban,
+        bankCode,
+      );
+
+      final name = response.accountName.trim();
+
+      if (name.isNotEmpty) {
+        return name;
+      }
+
+      throw NetworkException(
+        'Account name not found. Please check the details.',
+      );
+    }
+
+    try {
+      final token = await _getOrFetchNeosToken();
+      return await attempt(token);
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        print('[AUTH] Neos token expired during name lookup, retrying...');
+        await _secureStorage.delete(key: 'NEOS_SERVICE_TOKEN');
+        final freshToken = await getNeosServiceToken();
+        if (freshToken != null) {
+          return await attempt(freshToken);
+        }
+      }
+      if (e.type == DioExceptionType.connectionTimeout)
+        throw TimeoutException();
+      throw NetworkException(
+        'Failed to verify account name. Please try again.',
+      );
+    } catch (e) {
+      throw NetworkException(
+        'Failed to verify account name. Please try again.',
+      );
+    }
+  }
 
   Future<bool> isSignedIn() async {
     final token = await getAccessToken();
@@ -507,7 +769,7 @@ class AuthRepository {
 
       final users = await _authApiClient.getUsers(
         realm: realm,
-        username: username,  // Exact username match
+        username: username, // Exact username match
         adminToken: bearerAdminToken,
       );
 
@@ -552,12 +814,15 @@ class AuthRepository {
       await _secureStorage.write(key: _kSavedUsername, value: username);
 
       if (kDebugMode) {
-        print('[AUTH] Login successful. Username "$username" persisted to secure storage.');
+        print(
+          '[AUTH] Login successful. Username "$username" persisted to secure storage.',
+        );
       }
 
       return response;
     } on DioException catch (e) {
-      if (e.type == DioExceptionType.connectionTimeout) throw TimeoutException();
+      if (e.type == DioExceptionType.connectionTimeout)
+        throw TimeoutException();
       if (e.response?.statusCode == 401) throw InvalidCredentialsException();
       throw ServerException();
     } catch (e) {
@@ -577,8 +842,6 @@ class AuthRepository {
     }
   }
 
-
-
   Future<TokenResponse> refreshAccessToken(String refreshToken) async {
     try {
       final realm = dotenv.env['CC_REALM']!;
@@ -590,7 +853,8 @@ class AuthRepository {
         refreshToken: refreshToken,
       );
     } on DioException catch (e) {
-      if (e.type == DioExceptionType.connectionTimeout) throw TimeoutException();
+      if (e.type == DioExceptionType.connectionTimeout)
+        throw TimeoutException();
       throw ServerException();
     } catch (e) {
       if (e is NetworkException) rethrow;
@@ -598,157 +862,6 @@ class AuthRepository {
     }
   }
 
-  /// Validate BVN with the KYC service
-  Future<void> validateBvn({
-    required String bvn,
-    required String firstName,
-    required String lastName,
-    required String dateOfBirth,
-    required String tenantId,
-  }) async {
-    try {
-      // Use Neos service token for authorization
-      String? neosToken = await _secureStorage.read(key: 'NEOS_SERVICE_TOKEN');
-      if (neosToken == null || neosToken.isEmpty) {
-        neosToken = await getNeosServiceToken();
-      }
-
-      if (neosToken == null || neosToken.isEmpty) {
-        throw ClientException(message: 'Authorization failed. Please try again.');
-      }
-
-      final request = BvnValidationRequest(
-        bvn: bvn,
-        firstname: firstName,
-        lastname: lastName,
-        dob: dateOfBirth,
-      );
-
-      await _kycApiClient.validateBvn(
-        tenantId,
-        'Bearer $neosToken',
-        request,
-      );
-
-      print('[KYC] BVN validation successful for BVN: $bvn');
-    } on DioException catch (e) {
-      print('[KYC] BVN validation error: ${e.response?.statusCode}');
-      if (e.response?.statusCode == 401) {
-        await _secureStorage.delete(key: 'NEOS_SERVICE_TOKEN');
-      }
-      if (e.response?.statusCode == 400) {
-        throw ClientException(message: 'Invalid BVN. Please check and try again.');
-      } else if (e.response?.statusCode == 404) {
-        throw ClientException(message: 'BVN not found in the system.');
-      }
-      throw ServerException();
-    } catch (e) {
-      if (e is NetworkException) rethrow;
-      throw UnexpectedException();
-    }
-  }
-
-  /// Submit personal information to create a retail customer
-  /// Submit personal information to create a retail customer
-  Future<String?> submitPersonalInfo({
-    required String customerType,
-    required String customerCategory,
-    required String firstName,
-    required String? middleName,
-    required String lastName,
-    required String gender,
-    required String dateOfBirth,
-    required String maritalStatus,
-    required String phoneNumber,
-    required String email,
-    required String bvn,
-    required String address,
-    required String city,
-    required String? nin,
-    required String? tin,
-  }) async {
-    try {
-      // Use Neos service token for authorization
-      String? neosToken = await _secureStorage.read(key: 'NEOS_SERVICE_TOKEN');
-      if (neosToken == null || neosToken.isEmpty) {
-        neosToken = await getNeosServiceToken();
-      }
-
-      if (neosToken == null || neosToken.isEmpty) {
-        throw ClientException(message: 'Authorization failed. Please try again.');
-      }
-
-      final idempotentKey = DateTime.now().millisecondsSinceEpoch.toString();
-
-      // Read tenantId from .env
-      final tenantId = dotenv.env['xTenantId']!;
-
-      final request = SignupRetailCustomerRequest(
-        customerType: customerType,
-        customerCategory: customerCategory,
-        firstName: firstName,
-        middleName: middleName,
-        lastName: lastName,
-        gender: gender,
-        dob: dateOfBirth,
-        maritalStatus: maritalStatus,
-        phoneRef: phoneNumber,
-        email: email,
-        bvn: bvn,
-        address: address,
-        city: city,
-        nin: nin,
-        tin: tin,
-        idempotentKey: idempotentKey,
-        tenantId: tenantId,
-      );
-
-      final response = await _kycApiClient.signupRetailCustomer(
-        tenantId,
-        'Bearer $neosToken',
-        request,
-      );
-
-      print('[KYC] Personal info submitted successfully');
-      print('[KYC] Response status: ${response.response.statusCode}');
-      print('[KYC] Response data type: ${response.data.runtimeType}');
-      print('[KYC] Response data: ${response.data}');
-
-      // Extract customerNo with better error handling
-      String? customerNo;
-      if (response.data is Map<String, dynamic>) {
-        final map = response.data as Map<String, dynamic>;
-        customerNo = (map['customerNo'] ?? map['customerno'])?.toString();
-        print('[KYC] Extracted customerNo: $customerNo');
-      }
-
-      if (customerNo != null && customerNo.isNotEmpty) {
-        print('[KYC] Returning customerNo: $customerNo');
-        return customerNo;
-      } else {
-        print('[KYC] ERROR: customerNo is null or empty');
-        return null;
-      }
-    } on DioException catch (e) {
-      print('[KYC] Personal info submission error: ${e.response?.statusCode}');
-      print('[KYC] Error response: ${e.response?.data}');
-
-      if (e.response?.statusCode == 401) {
-        await _secureStorage.delete(key: 'NEOS_SERVICE_TOKEN');
-      }
-
-      if (e.response?.statusCode == 400) {
-        throw ClientException(message: 'Invalid information provided. Please check your details.');
-      } else if (e.response?.statusCode == 409) {
-        throw ClientException(message: 'A customer record already exists with this information.');
-      }
-      throw ServerException();
-    } catch (e) {
-      print('[KYC] Unexpected error: $e');
-      if (e is NetworkException) rethrow;
-      throw UnexpectedException();
-    }
-  }
   /// Get service-to-service token using Neos credentials
   /// Get Neos service token (for KYC uploads)
   Future<String?> getNeosServiceToken() async {
@@ -765,15 +878,21 @@ class AuthRepository {
       print('[AUTH] Checking env variables:');
       print('[AUTH] - NEOS_REALM: ${neosRealm != null ? "✓" : "✗"}');
       print('[AUTH] - NEOS_CLIENT_ID: ${neosClientId != null ? "✓" : "✗"}');
-      print('[AUTH] - NEOS_CLIENT_SECRET: ${neosClientId != null ? "✓" : "✗"}'); // Fixed clientSecret check
+      print(
+        '[AUTH] - NEOS_CLIENT_SECRET: ${neosClientSecret != null ? "✓" : "✗"}',
+      );
       print('[AUTH] - NEOS_USERNAME: ${neosUsername != null ? "✓" : "✗"}');
       print('[AUTH] - NEOS_PASSWORD: ${neosPassword != null ? "✓" : "✗"}');
 
-      if (neosRealm == null || neosClientId == null || neosClientSecret == null ||
-          neosUsername == null || neosPassword == null) {
+      if (neosRealm == null ||
+          neosClientId == null ||
+          neosClientSecret == null ||
+          neosUsername == null ||
+          neosPassword == null) {
         print('[AUTH] ERROR: Missing required Neos environment variables');
         throw ClientException(
-          message: 'Neos service configuration is incomplete. Please contact support.',
+          message:
+              'Neos service configuration is incomplete. Please contact support.',
         );
       }
 
@@ -817,19 +936,23 @@ class AuthRepository {
     required String fullName,
     required Map<String, dynamic> body,
   }) async {
-    final dio = Dio(BaseOptions(
-      baseUrl: dotenv.env['ISSL_API_DOMAIN']!,
-      connectTimeout: const Duration(seconds: 30),
-      receiveTimeout: const Duration(seconds: 30),
-    ));
+    final dio = Dio(
+      BaseOptions(
+        baseUrl: dotenv.env['ISSL_API_DOMAIN']!,
+        connectTimeout: const Duration(seconds: 30),
+        receiveTimeout: const Duration(seconds: 30),
+      ),
+    );
 
     if (kDebugMode) {
-      dio.interceptors.add(PrettyDioLogger(
-        requestHeader: true,
-        requestBody: true,
-        responseBody: true,
-        error: true,
-      ));
+      dio.interceptors.add(
+        PrettyDioLogger(
+          requestHeader: true,
+          requestBody: true,
+          responseBody: true,
+          error: true,
+        ),
+      );
     }
 
     return dio.post(
@@ -878,7 +1001,8 @@ class AuthRepository {
 
       if (neosToken == null || neosToken.isEmpty) {
         throw ClientException(
-          message: 'Unable to authorize upload right now. Kindly try again in a moment.',
+          message:
+              'Unable to authorize upload right now. Kindly try again in a moment.',
         );
       }
 
@@ -897,13 +1021,16 @@ class AuthRepository {
       } on DioException catch (e) {
         // STEP 3: If unauthorized, invalidate token, fetch fresh token, and retry once.
         if (e.response?.statusCode == 401) {
-          print('[KYC] First attempt returned 401. Refreshing service token and retrying once...');
+          print(
+            '[KYC] First attempt returned 401. Refreshing service token and retrying once...',
+          );
           await _secureStorage.delete(key: 'NEOS_SERVICE_TOKEN');
 
           final refreshedToken = await getNeosServiceToken();
           if (refreshedToken == null || refreshedToken.isEmpty) {
             throw ClientException(
-              message: 'Your session expired while uploading. Kindly tap submit again.',
+              message:
+                  'Your session expired while uploading. Kindly tap submit again.',
             );
           }
 
@@ -944,12 +1071,14 @@ class AuthRepository {
       if (e.response?.statusCode == 401) {
         await _secureStorage.delete(key: 'NEOS_SERVICE_TOKEN');
         throw ClientException(
-          message: 'Authorization failed for document upload. Kindly try again shortly.',
+          message:
+              'Authorization failed for document upload. Kindly try again shortly.',
         );
       }
 
       throw ClientException(
-        message: 'Failed to submit KYC documents. Please check your connection and try again.',
+        message:
+            'Failed to submit KYC documents. Please check your connection and try again.',
       );
     } catch (e) {
       print('[KYC] Unexpected error during document upload: $e');
@@ -958,7 +1087,8 @@ class AuthRepository {
       if (e is ClientException) rethrow;
 
       throw ClientException(
-        message: 'Something went wrong while submitting documents. Kindly try again.',
+        message:
+            'Something went wrong while submitting documents. Kindly try again.',
       );
     }
   }
@@ -999,13 +1129,14 @@ class AuthRepository {
       );
 
       if (users.isEmpty) {
-        print('[AUTH] ❌ Step 2 Failed: No user found with username "$username"');
+        print(
+          '[AUTH] ❌ Step 2 Failed: No user found with username "$username"',
+        );
         throw NetworkException('User not found in Keycloak');
       }
 
       final user = users.first;
-      final userId = user.id;
-      print('[AUTH] ✅ User Found. Keycloak UUID: $userId');
+      final userId = user.id; print('[AUTH] ✅ User Found. Keycloak UUID: $userId');
       print('[AUTH] Current Attributes: ${user.attributes}');
 
       // STEP 3: Merge Attributes
@@ -1014,14 +1145,14 @@ class AuthRepository {
       print('[AUTH] Step 3: Preparing attribute payload...');
 
       // Copy existing attributes or start fresh if null
-      final Map<String, dynamic> updatedAttributes = Map<String, dynamic>.from(user.attributes ?? {});
+      final Map<String, dynamic> updatedAttributes = Map<String, dynamic>.from(
+        user.attributes ?? {},
+      );
 
       // Keycloak REQUIRES attributes to be a List of Strings
       updatedAttributes['customerNo'] = [customerNo];
 
-      final updatePayload = {
-        "attributes": updatedAttributes,
-      };
+      final updatePayload = {"attributes": updatedAttributes};
 
       print('[AUTH] Payload prepared: $updatePayload');
 
@@ -1046,7 +1177,9 @@ class AuthRepository {
     } catch (e, stack) {
       print('[AUTH] ❌ CRITICAL ERROR in updateUserCustomerNo: $e');
       print('[AUTH] StackTrace: $stack');
-      throw NetworkException('Failed to sync customer information with security server.');
+      throw NetworkException(
+        'Failed to sync customer information with security server.',
+      );
     }
   }
 
@@ -1072,7 +1205,9 @@ class AuthRepository {
 
         // Check for customerNo during sync and update flag
         final attributes = freshUser.attributes ?? {};
-        final hasNo = attributes.containsKey('customerNo') || attributes.containsKey('CustomerNo');
+        final hasNo =
+            attributes.containsKey('customerNo') ||
+            attributes.containsKey('CustomerNo');
         await _userLocalStorage.setHasCustomerNo(hasNo);
 
         return freshUser;
@@ -1119,7 +1254,10 @@ class AuthRepository {
   Future<void> _saveTokens(TokenResponse response) async {
     await _secureStorage.write(key: _kAccessToken, value: response.accessToken);
     if (response.refreshToken != null) {
-      await _secureStorage.write(key: _kRefreshToken, value: response.refreshToken!);
+      await _secureStorage.write(
+        key: _kRefreshToken,
+        value: response.refreshToken!,
+      );
     }
   }
 
@@ -1127,10 +1265,12 @@ class AuthRepository {
     try {
       // 1. Construct the FULL URL manually to avoid "No host specified" errors
       // Ensure CC_BASE_URL is "https://sentry.issl.ng" in your .env
-      final String keycloakBase = dotenv.env['CC_BASE_URL'] ?? 'https://sentry.issl.ng';
+      final String keycloakBase =
+          dotenv.env['CC_BASE_URL'] ?? 'https://sentry.issl.ng';
       final String realm = dotenv.env['CC_REALM'] ?? 'CandourCrest';
 
-      final String fullUrl = '$keycloakBase/auth/realms/$realm/protocol/openid-connect/token';
+      final String fullUrl =
+          '$keycloakBase/auth/realms/$realm/protocol/openid-connect/token';
 
       // 2. Use a "clean" Dio instance.
       // Using _ref.read(authDioProvider) is dangerous here because it might
@@ -1143,7 +1283,8 @@ class AuthRepository {
         fullUrl,
         data: {
           'grant_type': 'client_credentials',
-          'client_id': dotenv.env['CC_ADMIN_CLIENT_ID'], // Ensure this is the ADMIN client, not "bankeasy"
+          'client_id': dotenv
+              .env['CC_ADMIN_CLIENT_ID'], // Ensure this is the ADMIN client, not "bankeasy"
           'client_secret': dotenv.env['ADMIN_CLIENT_SECRET'],
         },
         options: Options(contentType: Headers.formUrlEncodedContentType),
@@ -1154,7 +1295,9 @@ class AuthRepository {
     } on DioException catch (e) {
       print('[AUTH] ❌ Admin Auth Failed: ${e.response?.statusCode}');
       print('[AUTH] Error Data: ${e.response?.data}');
-      throw ServerException(message: 'Failed to authenticate for an administrative task.');
+      throw ServerException(
+        message: 'Failed to authenticate for an administrative task.',
+      );
     } catch (e) {
       print('[AUTH] ❌ Unexpected Error: $e');
       throw UnexpectedException();

@@ -116,7 +116,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
               color: const Color(0xFFF0F7FF),
               borderRadius: BorderRadius.circular(12),
               border: Border.all(
-                      color: AppColors.primaryColor.withValues(alpha: 0.1),
+                color: AppColors.primaryColor.withValues(alpha: 0.1),
               ),
             ),
             child: Row(
@@ -221,17 +221,32 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
             children: [
               Row(
                 children: [
-                  const Icon(Icons.support_agent, color: AppColors.primaryColor, size: 28),
+                  const Icon(
+                    Icons.support_agent,
+                    color: AppColors.primaryColor,
+                    size: 28,
+                  ),
                   const SizedBox(width: 12),
                   Text('Support', style: AppTextStyles.cabinBold18DarkBlue),
                 ],
               ),
               const SizedBox(height: 16),
-              Text('Need help? Contact us:', style: AppTextStyles.cabinRegular14MutedGray),
+              Text(
+                'Need help? Contact us:',
+                style: AppTextStyles.cabinRegular14MutedGray,
+              ),
               const SizedBox(height: 16),
-              _buildSupportContactRow(Icons.email_outlined, 'Info@hillcrestcapmgt.com', 'Email'),
+              _buildSupportContactRow(
+                Icons.email_outlined,
+                'Info@hillcrestcapmgt.com',
+                'Email',
+              ),
               const SizedBox(height: 12),
-              _buildSupportContactRow(Icons.phone_outlined, '08164218808', 'Phone number'),
+              _buildSupportContactRow(
+                Icons.phone_outlined,
+                '08164218808',
+                'Phone number',
+              ),
               const SizedBox(height: 8),
             ],
           ),
@@ -245,10 +260,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       children: [
         Icon(icon, color: AppColors.primaryColor, size: 22),
         const SizedBox(width: 10),
-        Expanded(
-          child: Text(value, style: AppTextStyles.cabinBold16DarkBlue
-          ),
-        ),
+        Expanded(child: Text(value, style: AppTextStyles.cabinBold16DarkBlue)),
         IconButton(
           icon: const Icon(Icons.copy, size: 18),
           color: AppColors.primaryColor,
@@ -256,9 +268,9 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
           onPressed: () async {
             await Clipboard.setData(ClipboardData(text: value));
             if (!context.mounted) return;
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('$label copied')),
-            );
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(SnackBar(content: Text('$label copied')));
           },
         ),
       ],
@@ -320,7 +332,9 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                           const SpaceW16(),
                           CircleAvatar(
                             radius: 18,
-                            backgroundColor: AppColors.primaryColor.withValues(alpha: 0.15),
+                            backgroundColor: AppColors.primaryColor.withValues(
+                              alpha: 0.15,
+                            ),
                             child: Text(
                               firstNameInitial,
                               style: AppTextStyles.cabinBold24DarkBlue.copyWith(
@@ -387,24 +401,22 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
   }
 
   // ... rest of the helper methods remain the same ...
-    Widget _buildQuickActionIcons() {
+  Widget _buildQuickActionIcons() {
     final actions = [
       {
         'name': 'Invest',
         'icon': Icons.trending_up_rounded,
-        'onTap': () =>
-            _runGatedAction(() => AutoTabsRouter.of(context).setActiveIndex(2)),
+        'onTap': () => AutoTabsRouter.of(context).setActiveIndex(2),
+      },
+      {
+        'name': 'Redeem',
+        'icon': Icons.redeem_rounded,
+        'onTap': () => AutoTabsRouter.of(context).setActiveIndex(1),
       },
       {
         'name': 'Support',
         'icon': Icons.support_agent,
         'onTap': _showSupportModal,
-      },
-      {
-        'name': 'Redeem',
-        'icon': Icons.redeem_rounded,
-        'onTap': () =>
-            _runGatedAction(() => AutoTabsRouter.of(context).setActiveIndex(1)),
       },
     ];
 
@@ -453,7 +465,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
         ),
       ),
     );
-    }
+  }
 
   Widget _buildBalanceCard() {
     final portfolioSummaryAsync = ref.watch(portfolioSummaryProvider);

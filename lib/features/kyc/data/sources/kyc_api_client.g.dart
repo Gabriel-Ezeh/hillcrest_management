@@ -116,6 +116,120 @@ class _KycApiClient implements KycApiClient {
     return httpResponse;
   }
 
+  @override
+  Future<List<Bank>> getAllBanks(String tenantId, String token) async {
+    final _extra = <String, dynamic>{};
+    final queryParameters = <String, dynamic>{};
+    final _headers = <String, dynamic>{
+      r'X-TENANTID': tenantId,
+      r'Authorization': token,
+    };
+    _headers.removeWhere((k, v) => v == null);
+    const Map<String, dynamic>? _data = null;
+    final _options = _setStreamType<List<Bank>>(
+      Options(method: 'GET', headers: _headers, extra: _extra)
+          .compose(
+            _dio.options,
+            'getallbanks',
+            queryParameters: queryParameters,
+            data: _data,
+          )
+          .copyWith(baseUrl: _combineBaseUrls(_dio.options.baseUrl, baseUrl)),
+    );
+    final _result = await _dio.fetch<List<dynamic>>(_options);
+    late List<Bank> _value;
+    try {
+      _value = _result.data!
+          .map((dynamic i) => Bank.fromJson(i as Map<String, dynamic>))
+          .toList();
+    } on Object catch (e, s) {
+      errorLogger?.logError(e, s, _options, response: _result);
+      rethrow;
+    }
+    return _value;
+  }
+
+  @override
+  Future<CustomerDetailsV4Response> getCustomerDetailsV4(
+    String tenantId,
+    String token,
+    String customerNo,
+  ) async {
+    final _extra = <String, dynamic>{};
+    final queryParameters = <String, dynamic>{r'CustomerNo': customerNo};
+    final _headers = <String, dynamic>{
+      r'X-TenantId': tenantId,
+      r'Authorization': token,
+    };
+    _headers.removeWhere((k, v) => v == null);
+    const Map<String, dynamic>? _data = null;
+    final _options = _setStreamType<CustomerDetailsV4Response>(
+      Options(method: 'GET', headers: _headers, extra: _extra)
+          .compose(
+            _dio.options,
+            'getCustomerDetailsv4',
+            queryParameters: queryParameters,
+            data: _data,
+          )
+          .copyWith(baseUrl: _combineBaseUrls(_dio.options.baseUrl, baseUrl)),
+    );
+    final _result = await _dio.fetch<Map<String, dynamic>>(_options);
+    late CustomerDetailsV4Response _value;
+    try {
+      _value = CustomerDetailsV4Response.fromJson(_result.data!);
+    } on Object catch (e, s) {
+      errorLogger?.logError(e, s, _options, response: _result);
+      rethrow;
+    }
+    return _value;
+  }
+
+  @override
+  Future<AccountLookupResponse> accountNameLookup(
+    String tenantId,
+    String token,
+    String contentType,
+    String nuban,
+    String bankCode,
+  ) async {
+    final _extra = <String, dynamic>{};
+    final queryParameters = <String, dynamic>{
+      r'nuban': nuban,
+      r'bankcode': bankCode,
+    };
+    final _headers = <String, dynamic>{
+      r'X-TENANTID': tenantId,
+      r'Authorization': token,
+      r'content-type': contentType,
+    };
+    _headers.removeWhere((k, v) => v == null);
+    const Map<String, dynamic>? _data = null;
+    final _options = _setStreamType<AccountLookupResponse>(
+      Options(
+            method: 'GET',
+            headers: _headers,
+            extra: _extra,
+            contentType: contentType,
+          )
+          .compose(
+            _dio.options,
+            'accountNameLookup',
+            queryParameters: queryParameters,
+            data: _data,
+          )
+          .copyWith(baseUrl: _combineBaseUrls(_dio.options.baseUrl, baseUrl)),
+    );
+    final _result = await _dio.fetch<Map<String, dynamic>>(_options);
+    late AccountLookupResponse _value;
+    try {
+      _value = AccountLookupResponse.fromJson(_result.data!);
+    } on Object catch (e, s) {
+      errorLogger?.logError(e, s, _options, response: _result);
+      rethrow;
+    }
+    return _value;
+  }
+
   RequestOptions _setStreamType<T>(RequestOptions requestOptions) {
     if (T != dynamic &&
         !(requestOptions.responseType == ResponseType.bytes ||

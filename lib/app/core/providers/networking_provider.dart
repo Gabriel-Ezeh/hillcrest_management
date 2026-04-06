@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:pretty_dio_logger/pretty_dio_logger.dart';
+import 'package:riverpod/riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../network/auth_interceptor.dart';
@@ -16,7 +17,8 @@ import '../../../features/authentication/data/repositories/auth_repository.dart'
 import '../../../features/investment/data/sources/investment_api_client.dart';
 import '../../../features/investment/data/repositories/investment_repository.dart';
 
-
+import '../../../features/kyc/data/models/bank.dart';
+import '../../../features/kyc/data/models/redeem_bank_info.dart';
 
 part 'networking_provider.g.dart';
 
@@ -115,8 +117,7 @@ OnboardingApiClient onboardingApiClient(Ref ref) =>
     OnboardingApiClient(ref.watch(onboardingDioProvider));
 
 @riverpod
-OtpApiClient otpApiClient(Ref ref) =>
-    OtpApiClient(ref.watch(otpDioProvider));
+OtpApiClient otpApiClient(Ref ref) => OtpApiClient(ref.watch(otpDioProvider));
 
 @riverpod
 KycApiClient kycApiClient(Ref ref) => KycApiClient(ref.watch(kycDioProvider));
@@ -143,3 +144,29 @@ AuthRepository authRepository(Ref ref) {
 InvestmentRepository investmentRepository(Ref ref) {
   return InvestmentRepository(ref.watch(investmentApiClientProvider));
 }
+
+/// PROVIDER: Fetch all banks (cached)
+final banksProvider = FutureProvider<List<Bank>>((ref) async {
+  final repo = ref.read(authRepositoryProvider);
+  return await repo.getAllBanks();
+});
+
+/// PROVIDER: Lookup account name
+final accountNameLookupProvider =
+    FutureProvider.family<String, Map<String, String>>((ref, params) async {
+      final repo = ref.read(authRepositoryProvider);
+      final nuban = params['nuban'] ?? '';
+      final bankCode = params['bankCode'] ?? '';
+      if (nuban.isEmpty || bankCode.isEmpty) throw Exception('Missing params');
+      return await repo.lookupAccountName(nuban: nuban, bankCode: bankCode);
+    });
+
+/// PROVIDER: Fetch redeem destination bank info for the signed-in customer.
+final redeemBankInfoProvider =
+    FutureProvider.family<RedeemBankInfo, String>((ref, customerNo) async {
+      if (customerNo.trim().isEmpty) {
+        throw Exception('Missing customer number');
+      }
+      final repo = ref.read(authRepositoryProvider);
+      return await repo.getRedeemBankInfo(customerNo: customerNo);
+    });

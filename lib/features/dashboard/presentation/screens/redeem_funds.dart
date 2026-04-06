@@ -1,7 +1,7 @@
 import 'package:auto_route/auto_route.dart'; // 🚀 Added AutoRoute import
-import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:hillcrest_finance/app/core/providers/networking_provider.dart';
 import 'package:hillcrest_finance/app/core/providers/user_local_storage_provider.dart';
 import 'package:hillcrest_finance/features/authentication/presentation/providers/auth_state_provider.dart';
 import 'package:hillcrest_finance/features/dashboard/presentation/screens/onboarding_completion_modal.dart';
@@ -18,6 +18,15 @@ class RedeemFundsScreen extends ConsumerStatefulWidget {
 }
 
 class _RedeemFundsScreenState extends ConsumerState<RedeemFundsScreen> {
+  void _runGatedRedeemAction(VoidCallback action) {
+    final authState = ref.read(authStateProvider);
+    if (authState.hasCustomerNo == true) {
+      action();
+    } else {
+      _checkOnboardingStatusAndShowModal();
+    }
+  }
+
   String? _selectedFund;
   final TextEditingController _amountController = TextEditingController();
   final TextEditingController _unitsController = TextEditingController();
@@ -26,20 +35,10 @@ class _RedeemFundsScreenState extends ConsumerState<RedeemFundsScreen> {
   String? _amountValidationError;
   bool _redeemByNaira = true; // Toggle between Naira and Units
 
-  late final String _bank;
-  late final String _accountNumber;
-
   @override
   void initState() {
     super.initState();
-    const banks = ['Wema Bank', 'GTBank', 'Zenith Bank', 'Access Bank', 'UBA'];
-    final random = Random();
-    _bank = banks[random.nextInt(banks.length)];
-    _accountNumber = List.generate(10, (_) => random.nextInt(10)).join();
-
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _checkOnboardingStatusAndShowModal();
-    });
+    // Removed auto-show KYC modal. Users can view the screen regardless of KYC status.
   }
 
   void _checkOnboardingStatusAndShowModal() {
@@ -162,16 +161,12 @@ class _RedeemFundsScreenState extends ConsumerState<RedeemFundsScreen> {
   @override
   Widget build(BuildContext context) {
     final portfolioAsync = ref.watch(portfolioProvider);
-    final authState = ref.watch(authStateProvider);
-    final storageUser = ref.read(userLocalStorageProvider).getUser();
-    final authFullName =
-        '${authState.user?.firstName ?? ''} ${authState.user?.lastName ?? ''}'
-            .trim();
-    final localFullName =
-        '${storageUser?.firstName ?? ''} ${storageUser?.lastName ?? ''}'.trim();
-    final fullName = authFullName.isNotEmpty
-        ? authFullName
-        : (localFullName.isNotEmpty ? localFullName : 'Hillcrest User');
+    ref.watch(authStateProvider);
+    final storage = ref.read(userLocalStorageProvider);
+    final customerNo = (storage.getCustomerNo() ?? '').trim();
+    final redeemBankInfoAsync = customerNo.isEmpty
+        ? const AsyncValue.error('Missing customer number', StackTrace.empty)
+        : ref.watch(redeemBankInfoProvider(customerNo));
 
     final portfolioFunds = portfolioAsync.maybeWhen(
       data: (holdings) => holdings
@@ -319,7 +314,15 @@ class _RedeemFundsScreenState extends ConsumerState<RedeemFundsScreen> {
               // --- Destination Bank Card ---
               _buildLabel('Funds would be credited to'),
               const SpaceH8(),
-              _buildBankInfoCard(fullName),
+              redeemBankInfoAsync.when(
+                data: (info) => _buildBankInfoCard(
+                  accountName: info.accountName,
+                  accountNumber: info.accountNumber,
+                  bankName: info.bankName,
+                ),
+                loading: () => _buildBankInfoLoadingCard(),
+                error: (error, _) => _buildBankInfoErrorCard(),
+              ),
 
               const SpaceH32(),
 
@@ -333,7 +336,7 @@ class _RedeemFundsScreenState extends ConsumerState<RedeemFundsScreen> {
                 width: double.infinity,
                 height: 56,
                 child: ElevatedButton(
-                  onPressed: () {
+                  onPressed: () => _runGatedRedeemAction(() {
                     if ((_selectedFund ?? '').isEmpty) {
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(
@@ -375,7 +378,7 @@ class _RedeemFundsScreenState extends ConsumerState<RedeemFundsScreen> {
                       return;
                     }
                     _showSubmissionDialog(value);
-                  },
+                  }),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.primaryColor,
                     shape: RoundedRectangleBorder(
@@ -571,7 +574,11 @@ class _RedeemFundsScreenState extends ConsumerState<RedeemFundsScreen> {
     );
   }
 
-  Widget _buildBankInfoCard(String fullName) {
+  Widget _buildBankInfoCard({
+    required String accountName,
+    required String accountNumber,
+    required String bankName,
+  }) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -591,20 +598,60 @@ class _RedeemFundsScreenState extends ConsumerState<RedeemFundsScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  fullName.toUpperCase(),
+                  accountName.toUpperCase(),
                   style: AppTextStyles.cabinBold16DarkBlue.copyWith(
                     fontSize: 14,
                   ),
                 ),
                 Text(
-                  _accountNumber,
+                  accountNumber,
                   style: AppTextStyles.cabinRegular14MutedGray,
                 ),
-                Text(_bank, style: AppTextStyles.cabinRegular14MutedGray),
+                Text(bankName, style: AppTextStyles.cabinRegular14MutedGray),
               ],
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildBankInfoLoadingCard() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(Sizes.RADIUS_8),
+        border: Border.all(color: const Color(0xFFE0E0E0)),
+      ),
+      child: Row(
+        children: const [
+          SizedBox(
+            height: 18,
+            width: 18,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          SpaceW12(),
+          Text('Loading account details...'),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBankInfoErrorCard() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(Sizes.RADIUS_8),
+        border: Border.all(color: Colors.red.shade200),
+        color: Colors.red.shade50,
+      ),
+      child: Text(
+        'Unable to load bank account details right now.',
+        style: AppTextStyles.cabinRegular14MutedGray.copyWith(
+          color: Colors.red.shade700,
+        ),
       ),
     );
   }

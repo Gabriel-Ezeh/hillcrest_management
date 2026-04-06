@@ -5,6 +5,7 @@ import 'package:hillcrest_finance/app/core/router/app_router.dart';
 import 'package:hillcrest_finance/app/core/providers/user_local_storage_provider.dart';
 import 'dart:io';
 import 'package:image_picker/image_picker.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:hillcrest_finance/features/kyc/data/models/kyc_document_submission_request.dart';
 import 'package:hillcrest_finance/app/core/providers/networking_provider.dart';
@@ -29,17 +30,22 @@ class IndividualKycDocumentUploadScreen extends ConsumerStatefulWidget {
 
 class _IndividualKycDocumentUploadScreenState
     extends ConsumerState<IndividualKycDocumentUploadScreen> {
-  // --- State ---
+  // --- State (Storing bytes directly to prevent PathNotFoundException) ---
   bool _isLoading = false;
-  File? _photoLivenessCheck;
-  File? _meansOfIdentification;
-  File? _proofOfAddress;
+  Uint8List? _photoBytes;
+  Uint8List? _poiBytes;
+  Uint8List? _poaBytes;
 
-  // Store selected subtypes
+  // Metadata for UI
   String? _poiSubtype;
   String? _poaSubtype;
+  String? _poiFileName;
+  String? _poaFileName;
 
   final ImagePicker _picker = ImagePicker();
+
+  // Maximum file size in bytes (2MB)
+  static const int _maxFileSize = 2 * 1024 * 1024;
 
   // Document subtype options
   final Map<String, List<String>> _documentSubtypes = {
@@ -60,19 +66,19 @@ class _IndividualKycDocumentUploadScreenState
     ],
   };
 
-  void _setDocumentFile(DocumentType type, String path) {
-    final file = File(path);
-
+  void _setDocumentData(DocumentType type, Uint8List data, {String? fileName}) {
     setState(() {
       switch (type) {
         case DocumentType.photoLiveness:
-          _photoLivenessCheck = file;
+          _photoBytes = data;
           break;
         case DocumentType.identification:
-          _meansOfIdentification = file;
+          _poiBytes = data;
+          _poiFileName = fileName;
           break;
         case DocumentType.proofOfAddress:
-          _proofOfAddress = file;
+          _poaBytes = data;
+          _poaFileName = fileName;
           break;
       }
     });
@@ -80,16 +86,15 @@ class _IndividualKycDocumentUploadScreenState
 
   Future<void> _startLivenessCheck() async {
     try {
-      final result = await context.router.push(const LivenessCheckRoute());
+      final result = await context.router.push(const FaceCaptureRoute());
 
       if (!mounted || result is! File) return;
 
-      _setDocumentFile(DocumentType.photoLiveness, result.path);
-    } catch (_) {
+      final bytes = await result.readAsBytes();
+      _setDocumentData(DocumentType.photoLiveness, bytes);
+    } catch (e) {
       if (mounted) {
-        ref
-            .read(notificationServiceProvider)
-            .showError(
+        ref.read(notificationServiceProvider).showError(
               'Unable to complete the liveness check. Please try again.',
             );
       }
@@ -171,20 +176,31 @@ class _IndividualKycDocumentUploadScreenState
     );
   }
 
-  Future<void> _pickDocument(DocumentType type) async {
+  bool _validateFileSize(int sizeInBytes) {
+    if (sizeInBytes > _maxFileSize) {
+      ref.read(notificationServiceProvider).showError(
+          'File size exceeds 2MB limit. Please choose a smaller file.');
+      return false;
+    }
+    return true;
+  }
+
+  Future<void> _pickFromGallery(DocumentType type) async {
     try {
-      final XFile? image = await _picker.pickImage(
-        source: ImageSource.gallery,
-        imageQuality: 80,
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['pdf', 'jpg', 'jpeg', 'png'],
+        withData: true, // Read bytes immediately
       );
 
-      if (image != null) {
-        _setDocumentFile(type, image.path);
+      if (result != null && result.files.single.bytes != null) {
+        final file = result.files.single;
+        if (_validateFileSize(file.size)) {
+          _setDocumentData(type, file.bytes!, fileName: file.name);
+        }
       }
     } catch (e) {
-      ref
-          .read(notificationServiceProvider)
-          .showError('Failed to pick document. Please try again.');
+      ref.read(notificationServiceProvider).showError('Failed to pick document. Please try again.');
     }
   }
 
@@ -192,16 +208,17 @@ class _IndividualKycDocumentUploadScreenState
     try {
       final XFile? photo = await _picker.pickImage(
         source: ImageSource.camera,
-        imageQuality: 80,
+        imageQuality: 70, // Slightly reduced quality to stay under 2MB
       );
 
       if (photo != null) {
-        _setDocumentFile(type, photo.path);
+        final bytes = await photo.readAsBytes();
+        if (_validateFileSize(bytes.length)) {
+          _setDocumentData(type, bytes, fileName: photo.name);
+        }
       }
     } catch (e) {
-      ref
-          .read(notificationServiceProvider)
-          .showError('Failed to take photo. Please try again.');
+      ref.read(notificationServiceProvider).showError('Failed to take photo. Please try again.');
     }
   }
 
@@ -222,31 +239,19 @@ class _IndividualKycDocumentUploadScreenState
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
-              leading: const Icon(
-                Icons.camera_alt,
-                color: AppColors.primaryColor,
-              ),
-              title: Text(
-                'Take Photo',
-                style: AppTextStyles.cabinRegular14DarkBlue,
-              ),
+              leading: const Icon(Icons.camera_alt, color: AppColors.primaryColor),
+              title: Text('Take Photo', style: AppTextStyles.cabinRegular14DarkBlue),
               onTap: () {
                 Navigator.pop(context);
                 _takePhoto(type);
               },
             ),
             ListTile(
-              leading: const Icon(
-                Icons.photo_library,
-                color: AppColors.primaryColor,
-              ),
-              title: Text(
-                'Choose from Gallery',
-                style: AppTextStyles.cabinRegular14DarkBlue,
-              ),
+              leading: const Icon(Icons.folder_open, color: AppColors.primaryColor),
+              title: Text('Choose File (PDF, PNG, JPG)', style: AppTextStyles.cabinRegular14DarkBlue),
               onTap: () {
                 Navigator.pop(context);
-                _pickDocument(type);
+                _pickFromGallery(type);
               },
             ),
             const SpaceH16(),
@@ -260,116 +265,75 @@ class _IndividualKycDocumentUploadScreenState
     );
   }
 
-  // Add this helper method here
-  String _truncateBinaryData(Uint8List? data, {int maxLength = 50}) {
-    if (data == null) return 'null';
-    if (data.length <= maxLength) return base64Encode(data);
-    return '${base64Encode(data.sublist(0, maxLength))}... (${data.length} bytes total)';
+  String _formatSize(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
   }
 
   Future<void> _onSubmitPressed() async {
-    if (_photoLivenessCheck == null ||
-        _meansOfIdentification == null ||
-        _proofOfAddress == null) {
-      ref
-          .read(notificationServiceProvider)
-          .showError('Please upload all required documents.');
+    if (_photoBytes == null || _poiBytes == null || _poaBytes == null) {
+      ref.read(notificationServiceProvider).showError('Please upload all required documents.');
       return;
     }
 
     setState(() => _isLoading = true);
 
     try {
-      // Cache all provider reads BEFORE any async operations
       final authRepository = ref.read(authRepositoryProvider);
       final userLocalStorage = ref.read(userLocalStorageProvider);
       final notificationService = ref.read(notificationServiceProvider);
 
-      // Step 1: Retrieve customerNo from storage
       final customerNo = userLocalStorage.getPendingCustomerNo();
       if (customerNo == null || customerNo.isEmpty) {
-        notificationService.showError(
-          'Customer number not found. Please complete personal information step.',
-        );
+        notificationService.showError('Customer number not found. Please complete personal information step.');
         return;
       }
 
-      // Fetch username and get user data from Keycloak
       final username = await userLocalStorage.getUsername();
       if (username == null) {
-        if (mounted) {
-          notificationService.showError(
-            'User information not found. Please login again.',
-          );
-        }
+        notificationService.showError('User information not found. Please login again.');
         return;
       }
 
-      // Get user details from Keycloak
       final realm = dotenv.env['CC_REALM']!;
       final adminToken = await authRepository.getAdminAuthToken();
-      final bearerAdminToken = 'Bearer $adminToken';
-
-      final authApiClient = ref.read(authApiClientProvider);
-      final users = await authApiClient.getUsers(
+      
+      final users = await ref.read(authApiClientProvider).getUsers(
         realm: realm,
         username: username,
-        adminToken: bearerAdminToken,
+        adminToken: 'Bearer $adminToken',
       );
 
       if (users.isEmpty) {
-        if (mounted) {
-          notificationService.showError('User details not found.');
-        }
+        notificationService.showError('User details not found.');
         return;
       }
 
       final firstName = users.first.firstName ?? 'User';
       final lastName = users.first.lastName ?? '';
 
-      print('[KYC_UI] Starting KYC document upload...');
-      print('[KYC_UI] CustomerNo: $customerNo');
-      print('[KYC_UI] Username: $username');
-
-      // Step 2: Convert files to Uint8List and create KycDocument list
-      print('[KYC_UI] Converting images to bytes...');
-      final photoBytes = await _photoLivenessCheck!.readAsBytes();
-      final idBytes = await _meansOfIdentification!.readAsBytes();
-      final addressBytes = await _proofOfAddress!.readAsBytes();
-
-      // Use truncated output in prints
-      print('[KYC_UI] Photo: ${_truncateBinaryData(photoBytes)}');
-      print('[KYC_UI] ID: ${_truncateBinaryData(idBytes)}');
-      print('[KYC_UI] Proof of Address: ${_truncateBinaryData(addressBytes)}');
-
       final documents = [
         KycDocument(
           documentType: 'Photo',
           documentReference: customerNo,
-          documentImage: photoBytes,
+          documentImage: _photoBytes!,
           documentComments: 'Customer photo',
         ),
         KycDocument(
           documentType: 'POI',
           documentReference: customerNo,
-          documentImage: idBytes,
-          documentComments: _poiSubtype != null
-              ? 'Proof of identity: $_poiSubtype'
-              : 'Proof of identity',
+          documentImage: _poiBytes!,
+          documentComments: 'POI: $_poiSubtype',
         ),
         KycDocument(
           documentType: 'POA',
           documentReference: customerNo,
-          documentImage: addressBytes,
-          documentComments: _poaSubtype != null
-              ? 'Proof of address: $_poaSubtype'
-              : 'Proof of address',
+          documentImage: _poaBytes!,
+          documentComments: 'POA: $_poaSubtype',
         ),
       ];
 
-      print('[KYC_UI] Created ${documents.length} documents');
-      print('[KYC_UI] Calling uploadKycDocuments...');
-      // Step 3: Upload KYC documents
       await authRepository.uploadKycDocuments(
         screenName: 'Individual KYC',
         fullName: '$firstName $lastName',
@@ -377,49 +341,19 @@ class _IndividualKycDocumentUploadScreenState
         documents: documents,
       );
 
-      print('[KYC_UI] Documents uploaded successfully');
-
-      // Step 4: update Keycloak with customerNo
-      print('[KYC_UI] Updating Keycloak with customerNo...');
-      await authRepository.updateUserCustomerNo(
-        username: username,
-        customerNo: customerNo,
-      );
-      print('[KYC_UI] Keycloak updated successfully');
-
-      // Step 5: mark KYC complete locally so post-navigation checks use fresh state
+      await authRepository.updateUserCustomerNo(username: username, customerNo: customerNo);
       await ref.read(authStateProvider.notifier).markKycCompleted(customerNo);
-      print('[KYC_UI] Auth state updated locally with completed KYC');
 
       if (!mounted) return;
       notificationService.showSuccess('KYC submission completed successfully');
+      context.router.pushPath('/main/dashboard');
 
-      // Step 6: Navigate to next screen
-      if (mounted) {
-        context.router.pushPath('/main/dashboard');
-      }
-    } on ClientException catch (e) {
-      if (mounted) {
-        ref.read(notificationServiceProvider).showError(e.message);
-      }
-      print('[KYC_UI] ClientException: ${e.message}');
-    } on NetworkException catch (e) {
-      if (mounted) {
-        ref.read(notificationServiceProvider).showError(e.message);
-      }
-      print('[KYC_UI] NetworkException: ${e.message}');
     } catch (e) {
       if (mounted) {
-        ref
-            .read(notificationServiceProvider)
-            .showError('Document upload failed. Please try again.');
+        ref.read(notificationServiceProvider).showError('Document upload failed. Please try again.');
       }
-      print('[KYC_UI] Error during document submission: $e');
-      print('[KYC_UI] Error type: ${e.runtimeType}');
     } finally {
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -440,85 +374,57 @@ class _IndividualKycDocumentUploadScreenState
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Progress indicator
               Row(
                 children: [
-                  Expanded(
-                    child: Container(
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: AppColors.lightGray,
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
-                  ),
+                  Expanded(child: Container(height: 4, decoration: BoxDecoration(color: AppColors.lightGray, borderRadius: BorderRadius.circular(2)))),
                   const SpaceW4(),
-                  Expanded(
-                    child: Container(
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: AppColors.primaryColor,
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
-                  ),
+                  Expanded(child: Container(height: 4, decoration: BoxDecoration(color: AppColors.primaryColor, borderRadius: BorderRadius.circular(2)))),
                 ],
               ),
               const SpaceH24(),
+              Text('KYC Document Upload', style: AppTextStyles.cabinBold24DarkBlue),
+              const SpaceH8(),
               Text(
-                'KYC Document Upload',
-                style: AppTextStyles.cabinBold24DarkBlue,
+                'Accepted formats: PDF, PNG, JPG (Max 2MB per file)',
+                style: AppTextStyles.cabinRegular14MutedGray.copyWith(color: AppColors.primaryColor, fontWeight: FontWeight.w500),
               ),
               const SpaceH24(),
 
-              // Photo - Liveness Check
               _DocumentUploadCard(
                 icon: Icons.camera_alt_outlined,
-                title: 'Photo',
-                subtitle: _photoLivenessCheck != null
-                    ? 'Document uploaded'
-                    : 'Complete a smile verification check',
-                helperText:
-                    'We will capture your selfie automatically once you smile',
-                isUploaded: _photoLivenessCheck != null,
+                title: 'Live Photo',
+                subtitle: _photoBytes != null ? 'Liveness check completed' : 'Complete a smile verification check',
+                helperText: _photoBytes != null ? 'Format: Image' : 'Selfie will be captured automatically',
+                isUploaded: _photoBytes != null,
                 onTap: () => _showUploadOptions(DocumentType.photoLiveness),
               ),
               const SpaceH16(),
 
-              // Proof of Identity
               _DocumentUploadCard(
                 icon: Icons.badge_outlined,
                 title: 'Proof of Identity',
-                subtitle: _meansOfIdentification != null
-                    ? (_poiSubtype ?? 'Document uploaded')
-                    : 'Select and upload valid ID',
-                helperText:
-                    'Upload one valid government-issued ID (NIN, Driver\'s License, etc.)',
-                isUploaded: _meansOfIdentification != null,
+                subtitle: _poiBytes != null ? (_poiSubtype ?? 'Document uploaded') : 'Select and upload valid ID',
+                helperText: _poiBytes != null 
+                    ? 'Size: ${_formatSize(_poiBytes!.length)} | ${_poiFileName ?? 'File Ready'}'
+                    : 'Clear scan of ID (National ID, Passport, etc.)',
+                isUploaded: _poiBytes != null,
                 onTap: () => _showSubtypeSelector(DocumentType.identification),
               ),
               const SpaceH16(),
 
-              // Proof of Address
               _DocumentUploadCard(
                 icon: Icons.home_outlined,
                 title: 'Proof of Address',
-                subtitle: _proofOfAddress != null
-                    ? (_poaSubtype ?? 'Document uploaded')
-                    : 'Select and upload address proof',
-                helperText:
-                    'Upload utility bill or financial document issued within 3 months',
-                isUploaded: _proofOfAddress != null,
+                subtitle: _poaBytes != null ? (_poaSubtype ?? 'Document uploaded') : 'Select and upload address proof',
+                helperText: _poaBytes != null 
+                    ? 'Size: ${_formatSize(_poaBytes!.length)} | ${_poaFileName ?? 'File Ready'}'
+                    : 'Utility bill issued within last 3 months',
+                isUploaded: _poaBytes != null,
                 onTap: () => _showSubtypeSelector(DocumentType.proofOfAddress),
               ),
               const SpaceH32(),
 
-              // Submit Button
-              AppButton(
-                text: 'Submit',
-                onPressed: _onSubmitPressed,
-                isLoading: _isLoading,
-              ),
+              AppButton(text: 'Submit KYC', onPressed: _onSubmitPressed, isLoading: _isLoading),
               const SpaceH48(),
             ],
           ),
@@ -528,10 +434,8 @@ class _IndividualKycDocumentUploadScreenState
   }
 }
 
-// --- Document Type Enum ---
 enum DocumentType { photoLiveness, identification, proofOfAddress }
 
-// --- Document Upload Card Widget ---
 class _DocumentUploadCard extends StatelessWidget {
   final IconData icon;
   final String title;
@@ -541,12 +445,8 @@ class _DocumentUploadCard extends StatelessWidget {
   final VoidCallback onTap;
 
   const _DocumentUploadCard({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-    required this.helperText,
-    required this.isUploaded,
-    required this.onTap,
+    required this.icon, required this.title, required this.subtitle, 
+    required this.helperText, required this.isUploaded, required this.onTap,
   });
 
   @override
@@ -557,14 +457,9 @@ class _DocumentUploadCard extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.all(Sizes.PADDING_16),
         decoration: BoxDecoration(
-          border: Border.all(
-            color: isUploaded ? AppColors.successGreen : AppColors.lightGray,
-            width: 1,
-          ),
+          border: Border.all(color: isUploaded ? AppColors.successGreen : AppColors.lightGray),
           borderRadius: BorderRadius.circular(12),
-          color: isUploaded
-              ? AppColors.successGreen.withValues(alpha: 0.05)
-              : Colors.transparent,
+          color: isUploaded ? AppColors.successGreen.withValues(alpha: 0.05) : Colors.transparent,
         ),
         child: Row(
           children: [
@@ -578,40 +473,14 @@ class _DocumentUploadCard extends StatelessWidget {
                   const SpaceH4(),
                   Text(subtitle, style: AppTextStyles.cabinRegular14MutedGray),
                   const SpaceH4(),
-                  Text(
-                    helperText,
-                    style: AppTextStyles.cabinRegular14MutedGray.copyWith(
-                      fontSize: 11,
-                      fontStyle: FontStyle.italic,
-                    ),
-                  ),
+                  Text(helperText, style: AppTextStyles.cabinRegular14MutedGray.copyWith(fontSize: 11, fontStyle: FontStyle.italic)),
                 ],
               ),
             ),
             Container(
-              width: 32,
-              height: 32,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                border: Border.all(
-                  color: isUploaded
-                      ? AppColors.successGreen
-                      : AppColors.lightGray,
-                  width: 2,
-                ),
-                color: isUploaded ? AppColors.successGreen : Colors.transparent,
-              ),
-              child: isUploaded
-                  ? const Icon(
-                      Icons.check,
-                      color: Colors.white,
-                      size: Sizes.ICON_SIZE_18,
-                    )
-                  : const Icon(
-                      Icons.add,
-                      color: AppColors.mutedGray,
-                      size: Sizes.ICON_SIZE_18,
-                    ),
+              width: 32, height: 32,
+              decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: isUploaded ? AppColors.successGreen : AppColors.lightGray, width: 2), color: isUploaded ? AppColors.successGreen : Colors.transparent),
+              child: Icon(isUploaded ? Icons.check : Icons.add, color: isUploaded ? Colors.white : AppColors.mutedGray, size: Sizes.ICON_SIZE_18),
             ),
           ],
         ),

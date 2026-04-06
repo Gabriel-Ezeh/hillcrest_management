@@ -5,6 +5,7 @@ import 'package:awesome_dialog/awesome_dialog.dart';
 import 'package:hillcrest_finance/app/core/router/app_router.dart';
 import 'package:hillcrest_finance/features/authentication/presentation/providers/auth_state_provider.dart';
 import 'package:hillcrest_finance/features/dashboard/presentation/screens/onboarding_completion_modal.dart';
+import 'package:hillcrest_finance/features/dashboard/presentation/widgets/home_no_transactions_card.dart';
 import 'package:hillcrest_finance/features/investment/presentation/providers/investment_providers.dart';
 import 'package:hillcrest_finance/features/investment/data/models/investment_scheme.dart';
 import 'package:hillcrest_finance/ui/widgets/app_payment_modal.dart';
@@ -39,10 +40,11 @@ class _InvestmentScreenState extends ConsumerState<InvestmentScreen> {
   /// Gatekeeper function integrated with your Onboarding Modal flow
   void _runGatedAction(VoidCallback action) {
     final authState = ref.read(authStateProvider);
-
+    // Only gate user-initiated actions, not screen load or listeners
     if (authState.hasCustomerNo == true) {
       action();
     } else {
+      // Only show modal if this is a direct user action (button/tap)
       _checkOnboardingStatusAndShowModal();
     }
   }
@@ -54,7 +56,6 @@ class _InvestmentScreenState extends ConsumerState<InvestmentScreen> {
     final authState = ref.read(authStateProvider);
     if (authState.isAuthenticated && authState.hasCustomerNo != true) {
       final accountType = authState.accountType ?? 'Individual';
-
       showOnboardingCompletionModal(
         context,
         accountType: accountType,
@@ -73,16 +74,7 @@ class _InvestmentScreenState extends ConsumerState<InvestmentScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Listen for state changes to auto-show modal if needed
-    ref.listen(authStateProvider.select((state) => state.hasCustomerNo), (
-      previous,
-      next,
-    ) {
-      if (ref.read(authStateProvider).isAuthenticated && next != true) {
-        _checkOnboardingStatusAndShowModal();
-      }
-    });
-
+    // Removed auto-show KYC modal. Users can view the screen regardless of KYC status.
     return Scaffold(
       backgroundColor: AppColors.white,
       body: RefreshIndicator(
@@ -547,6 +539,42 @@ class _InvestmentScreenState extends ConsumerState<InvestmentScreen> {
   }
 
   Widget _buildInvestmentActivitiesSection() {
+    final authState = ref.watch(authStateProvider);
+    if (authState.hasCustomerNo != true) {
+      // If user hasn't completed KYC, show no transactions card and do not fetch
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: Sizes.PADDING_24),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'Investment Activities',
+                  style: AppTextStyles.cabinBold24DarkBlue.copyWith(fontSize: 18),
+                ),
+                GestureDetector(
+                  onTap: () => _runGatedAction(
+                    () => context.router.push(const InvestorTransactionsRoute()),
+                  ),
+                  child: Text(
+                    'view all',
+                    style: AppTextStyles.cabinRegular14Primary.copyWith(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SpaceH16(),
+          const HomeNoTransactionsCard(),
+        ],
+      );
+    }
+
     final transactionsAsync = ref.watch(investorTransactionsProvider);
 
     return Column(
@@ -561,7 +589,6 @@ class _InvestmentScreenState extends ConsumerState<InvestmentScreen> {
                 'Investment Activities',
                 style: AppTextStyles.cabinBold24DarkBlue.copyWith(fontSize: 18),
               ),
-              // GATED: View All Text
               GestureDetector(
                 onTap: () => _runGatedAction(
                   () => context.router.push(const InvestorTransactionsRoute()),
@@ -581,26 +608,9 @@ class _InvestmentScreenState extends ConsumerState<InvestmentScreen> {
         transactionsAsync.when(
           data: (transactions) {
             final displayTransactions = transactions.take(4).toList();
-
             if (displayTransactions.isEmpty) {
-              return Container(
-                padding: const EdgeInsets.all(32),
-                margin: const EdgeInsets.symmetric(
-                  horizontal: Sizes.PADDING_24,
-                ),
-                decoration: BoxDecoration(
-                  color: AppColors.lightGray.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(Sizes.RADIUS_12),
-                ),
-                child: Center(
-                  child: Text(
-                    'No activities yet',
-                    style: AppTextStyles.cabinRegular14MutedGray,
-                  ),
-                ),
-              );
+              return const HomeNoTransactionsCard();
             }
-
             return ListView.builder(
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
@@ -610,7 +620,7 @@ class _InvestmentScreenState extends ConsumerState<InvestmentScreen> {
                 final transaction = displayTransactions[index];
                 return GestureDetector(
                   onTap: () => _runGatedAction(
-                    () => print('Transaction tapped: ${transaction.transId}'),
+                    () => print('Transaction tapped: \\${transaction.transId}'),
                   ),
                   child: _buildTransactionTile(transaction),
                 );

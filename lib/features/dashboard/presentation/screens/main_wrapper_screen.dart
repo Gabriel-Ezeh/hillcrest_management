@@ -30,22 +30,15 @@ class MainWrapperScreen extends ConsumerWidget {
     return AutoTabsScaffold(
       routes: const [
         DashboardRoute(),
-        RedeemFundsRoute(), // Placeholder for Wallet
-        InvestmentRoute(), // Placeholder for Invest
+        RedeemFundsRoute(),
+        InvestmentRoute(),
         ProfileRoute(),
       ],
       bottomNavigationBuilder: (context, tabsRouter) {
         return AppBottomNav(
           currentIndex: tabsRouter.activeIndex,
           onTap: (index) {
-            final authState = ref.read(authStateProvider);
-            final requiresKyc = index == 1 || index == 2;
-
-            if (requiresKyc && authState.hasCustomerNo != true) {
-              _showKycModal(context, ref);
-              return;
-            }
-
+            // Allow navigation to all tabs, including Redeem and Investment, without KYC modal
             tabsRouter.setActiveIndex(index);
           },
         );

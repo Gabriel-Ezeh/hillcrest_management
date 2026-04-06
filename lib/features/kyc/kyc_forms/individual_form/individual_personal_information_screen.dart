@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:auto_route/auto_route.dart';
@@ -14,6 +15,10 @@ import '../../../../ui/widgets/forms/app_textfields.dart';
 import '../../../../utils/constants/values.dart';
 import '../../presentation/providers/kyc_state_notifier.dart';
 import '../../../authentication/data/repositories/auth_repository.dart';
+
+import '../individual_form/bank_selection_modal.dart';
+import '../../../../utils/constants/validators/field_validators.dart';
+import '../../../kyc/data/models/bank.dart';
 
 @RoutePage()
 class IndividualPersonalInformationScreen extends ConsumerStatefulWidget {
@@ -38,6 +43,17 @@ class _IndividualPersonalInformationScreenState
   final TextEditingController _cityController = TextEditingController();
   final TextEditingController _stateController = TextEditingController();
   final TextEditingController _ninController = TextEditingController();
+
+  // --- Bank Fields ---
+  Bank? _selectedBank;
+  final TextEditingController _bankAccountNumberController =
+      TextEditingController();
+  final TextEditingController _bankAccountNameController =
+      TextEditingController();
+  final TextEditingController _bankSelectionController =
+      TextEditingController();
+  bool _isAccountNameLoading = false;
+  String? _accountNameError;
 
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
 
@@ -148,46 +164,11 @@ class _IndividualPersonalInformationScreenState
     _cityController.dispose();
     _stateController.dispose();
     _ninController.dispose();
+    _bankAccountNumberController.dispose();
+    _bankAccountNameController.dispose();
+    _bankSelectionController.dispose();
     super.dispose();
   }
-
-  // /// Load user data from Keycloak and pre-fill the form
-  // Future<void> _loadUserData() async {
-  //   try {
-  //     final userLocalStorage = ref.read(userLocalStorageProvider);
-  //     final username = await userLocalStorage.getUsername();
-  //
-  //     if (username == null) {
-  //       if (mounted) {
-  //         ref.read(notificationServiceProvider).showError('Unable to load user information. Please login again.');
-  //         context.router.pop();
-  //       }
-  //       return;
-  //     }
-  //
-  //     final authRepository = ref.read(authRepositoryProvider);
-  //
-  //     // Get user by username from Keycloak
-  //     final realm = dotenv.env['CC_REALM']!;
-  //     final adminToken = await authRepository.getAdminAuthToken();
-  //     final bearerAdminToken = 'Bearer $adminToken';
-  //
-  //     // This requires adding a public method to AuthRepository or using the API client directly
-  //     // For now, we'll use a simplified approach
-  //
-  //     setState(() => _isInitializing = false);
-  //   } on NetworkException catch (e) {
-  //     if (mounted) {
-  //       ref.read(notificationServiceProvider).showError(e.message);
-  //       setState(() => _isInitializing = false);
-  //     }
-  //   } catch (e) {
-  //     if (mounted) {
-  //       ref.read(notificationServiceProvider).showError('Failed to load user data. Please try again.');
-  //       setState(() => _isInitializing = false);
-  //     }
-  //   }
-  // }
 
   Future<void> _onContinuePressed() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
@@ -209,25 +190,29 @@ class _IndividualPersonalInformationScreenState
           .showError('Please select a country.');
       return;
     }
+    if (_selectedBank == null) {
+      ref
+          .read(notificationServiceProvider)
+          .showError('Please select your bank.');
+      return;
+    }
+    if (_bankAccountNumberController.text.trim().length != 10) {
+      ref
+          .read(notificationServiceProvider)
+          .showError('Bank account number must be 10 digits.');
+      return;
+    }
+    if (_bankAccountNameController.text.trim().isEmpty) {
+      ref
+          .read(notificationServiceProvider)
+          .showError('Bank account name is required.');
+      return;
+    }
 
     setState(() => _isLoading = true);
 
     try {
       final authRepository = ref.read(authRepositoryProvider);
-
-      // // Step 1: Validate BVN
-      // print('[KYC] Step 1: Validating BVN...');
-      // await authRepository.validateBvn(
-      //   bvn: _bvnController.text.trim(),
-      //   firstName: _firstNameController.text.trim(),
-      //   lastName: _lastNameController.text.trim(),
-      //   dateOfBirth: _dateOfBirthController.text.trim(),
-      //   tenantId: tenantId,
-      // );
-      // print('[KYC] BVN validation successful');
-      //
-      // if (!mounted) return;
-      // ref.read(notificationServiceProvider).showSuccess('BVN validation successful');
 
       // Step 2: Submit Personal Information
       print('[KYC] Step 2: Submitting personal information...');
@@ -251,6 +236,11 @@ class _IndividualPersonalInformationScreenState
             ? null
             : _ninController.text.trim(),
         tin: null,
+        bankers: _selectedBank?.name,
+        bankAccountNo: _bankAccountNumberController.text.trim(),
+        bankAccountName: _bankAccountNameController.text.trim(),
+        bankCode: _selectedBank?.code, // Added bankCode
+        bankName: _selectedBank?.name, // Added bankName
       );
       print(
         '[KYC] Personal info submitted successfully. CustomerNo: $customerNo',
@@ -535,14 +525,138 @@ class _IndividualPersonalInformationScreenState
                   initialDropdownValue: _selectedCountry,
                 ),
 
+                const SpaceH16(),
+
+                // --- BANK FIELDS ---
+                Consumer(
+                  builder: (context, ref, _) {
+                    final banksAsync = ref.watch(banksProvider);
+                    return banksAsync.when(
+                      data: (banks) => AppTextField(
+                        label: 'Select Bank',
+                        controller: _bankSelectionController,
+                        type: AppTextFieldType.text,
+                        readOnly: true,
+                        hintText: 'Choose your bank',
+                        suffixIcon: const Icon(
+                          Icons.keyboard_arrow_down_rounded,
+                        ),
+                        onTap: () async {
+                          final selected = await showBankSelectionModal(
+                            context: context,
+                            banks: banks,
+                          );
+                          if (selected != null) {
+                            setState(() {
+                              _selectedBank = selected;
+                              _bankSelectionController.text = selected.name;
+                              _accountNameError = null;
+                            });
+                          }
+                        },
+                        validator: (_) => _selectedBank == null
+                            ? 'Please select your bank'
+                            : null,
+                      ),
+                      loading: () => const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 8.0),
+                        child: LinearProgressIndicator(),
+                      ),
+                      error: (e, __) => Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 8.0),
+                        child: Text(
+                          'Failed to load banks',
+                          style: TextStyle(color: Colors.red),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+                const SpaceH16(),
+                AppTextField(
+                  controller: _bankAccountNumberController,
+                  label: 'Bank Account Number',
+                  type: AppTextFieldType.text,
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [
+                    FilteringTextInputFormatter.digitsOnly,
+                    LengthLimitingTextInputFormatter(10),
+                  ],
+                  validator: (value) {
+                    final v = value?.trim() ?? '';
+                    if (v.isEmpty) return 'Account number is required';
+                    if (v.length != 10)
+                      return 'Account number must be 10 digits';
+                    return null;
+                  },
+                  onChanged: (val) async {
+                    if (_selectedBank != null && val.length == 10) {
+                      setState(() {
+                        _isAccountNameLoading = true;
+                        _accountNameError = null;
+                        _bankAccountNameController.text = '';
+                      });
+                      try {
+                        final name = await ref.read(
+                          accountNameLookupProvider({
+                            'nuban': val,
+                            'bankCode': _selectedBank!.code,
+                          }).future,
+                        );
+                        setState(() {
+                          _bankAccountNameController.text = name;
+                          _accountNameError = null;
+                        });
+                      } catch (e) {
+                        setState(() {
+                          _bankAccountNameController.text = '';
+                          _accountNameError = 'Could not fetch account name';
+                        });
+                      } finally {
+                        setState(() {
+                          _isAccountNameLoading = false;
+                        });
+                      }
+                    } else {
+                      setState(() {
+                        _bankAccountNameController.text = '';
+                        _accountNameError = null;
+                      });
+                    }
+                  },
+                ),
+                const SpaceH16(),
+                Stack(
+                  alignment: Alignment.centerRight,
+                  children: [
+                    AppTextField(
+                      controller: _bankAccountNameController,
+                      label: 'Bank Account Name',
+                      type: AppTextFieldType.text,
+                      readOnly: true,
+                      validator: (_) => _accountNameError,
+                    ),
+                    if (_isAccountNameLoading)
+                      const Padding(
+                        padding: EdgeInsets.only(right: 16.0),
+                        child: SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      ),
+                  ],
+                ),
+                const SpaceH16(),
+
                 // NIN (Optional)
                 AppTextField(
                   controller: _ninController,
-                  label: 'NIN (Optional)',
+                  label: 'NIN',
                   type: AppTextFieldType.nin,
                   validator: (value) {
                     final nin = value?.trim() ?? '';
-                    if (nin.isEmpty) return null;
+                    if (nin.isEmpty) return 'NIN is required';
                     if (nin.length != 11) return 'NIN must be 11 digits';
                     return null;
                   },

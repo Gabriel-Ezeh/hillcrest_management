@@ -26,6 +26,7 @@ dependencies:
   shimmer: ^3.0.0
   overlay_support: ^2.1.0
   mime: ^2.0.0
+  file_picker: ^8.1.7
 
   dio: ^5.9.0
   sentry_flutter: ^9.8.0
@@ -37,16 +38,14 @@ dependencies:
   flutter_hooks: ^0.21.3+1
   retrofit: ^4.9.0
   flutter_native_splash: ^2.4.7
-  json_annotation: ^4.9.0 # Added for json_serializable
+  json_annotation: ^4.9.0
   freezed_annotation: ^3.1.0
   awesome_dialog: ^3.3.0
   country_flags: ^4.1.2
   lucide_icons: ^0.257.0
   url_launcher: ^6.3.1
-  #  selfie_liveness: ^3.3.4
-  #  flutter_image_compress: ^1.1.1
   camera: ^0.11.3
-  smart_liveliness_detection: ^0.3.2
+  google_mlkit_face_detection: ^0.12.0
 
 dev_dependencies:
   flutter_test:
@@ -97,7 +96,7 @@ flutter_native_splash:
 flutter_launcher_icons:
   android: "launcher_icon"
   ios: true
-  remove_alpha_ios: true # Add this line
+  remove_alpha_ios: true
   image_path: "assets/hillcrest_images/hillcrest_logo.png"
   adaptive_icon_background: "#FFFFFF"
   adaptive_icon_foreground: "assets/hillcrest_images/hillcrest_logo_icon.png"

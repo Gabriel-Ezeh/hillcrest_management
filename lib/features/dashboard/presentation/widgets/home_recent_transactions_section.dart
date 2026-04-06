@@ -2,6 +2,7 @@ import 'package:auto_route/auto_route.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:hillcrest_finance/app/core/router/app_router.dart';
+import 'package:hillcrest_finance/features/authentication/presentation/providers/auth_state_provider.dart';
 import 'package:hillcrest_finance/features/dashboard/presentation/widgets/home_no_transactions_card.dart';
 import 'package:hillcrest_finance/features/investment/presentation/providers/investment_providers.dart';
 import 'package:hillcrest_finance/utils/constants/values.dart';
@@ -11,6 +12,43 @@ class HomeRecentTransactionsSection extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final authState = ref.watch(authStateProvider);
+    if (authState.hasCustomerNo != true) {
+      // If user hasn't completed KYC, show no transactions card and do not fetch
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: Sizes.PADDING_24),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'Recent Transactions',
+                  style: AppTextStyles.cabinBold24DarkBlue.copyWith(
+                    fontSize: 14,
+                  ),
+                ),
+                GestureDetector(
+                  onTap: () =>
+                      context.router.push(const InvestorTransactionsRoute()),
+                  child: Text(
+                    'view all',
+                    style: AppTextStyles.cabinRegular14Primary.copyWith(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SpaceH16(),
+          const HomeNoTransactionsCard(),
+        ],
+      );
+    }
+
     final transactionsAsync = ref.watch(investorTransactionsProvider);
 
     return Column(
@@ -40,13 +78,13 @@ class HomeRecentTransactionsSection extends ConsumerWidget {
           ),
         ),
         const SpaceH16(),
+        // ...existing code for transactionsAsync.when...
         transactionsAsync.when(
           data: (transactions) {
             final displayTransactions = transactions.take(4).toList();
             if (displayTransactions.isEmpty) {
               return const HomeNoTransactionsCard();
             }
-
             final schemeMapAsync = ref.watch(schemeNameMapProvider);
             return schemeMapAsync.when(
               data: (schemeMap) {

@@ -5,9 +5,15 @@ part 'signup_retail_customer_request.g.dart';
 @JsonSerializable(includeIfNull: false)
 class SignupRetailCustomerRequest {
   final String customerType;
+  
+  @JsonKey(name: 'customercategory')
   final String customerCategory;
+  
   final String firstName;
+  
+  @JsonKey(name: 'otherName') 
   final String? middleName;
+  
   final String lastName;
   final String gender;
   final String dob;
@@ -17,10 +23,32 @@ class SignupRetailCustomerRequest {
   final String bvn;
   final String address;
   final String city;
+  
+  @JsonKey(name: 'nin')
   final String? nin;
+  
+  @JsonKey(name: 'tin')
   final String? tin;
+  
+  @JsonKey(name: 'idempotentkey')
   final String idempotentKey;
+  
+  @JsonKey(name: 'tenantid')
   final String tenantId;
+
+  final String? bankers;
+  
+  @JsonKey(name: 'bankaccountno')
+  final String? bankAccountNo;
+  
+  @JsonKey(name: 'bankaccountname')
+  final String? bankAccountName;
+
+  @JsonKey(name: 'bankcode')
+  final String? bankCode;
+  
+  @JsonKey(name: 'bankname')
+  final String? bankName;
 
   SignupRetailCustomerRequest({
     required this.customerType,
@@ -40,6 +68,11 @@ class SignupRetailCustomerRequest {
     this.tin,
     required this.idempotentKey,
     required this.tenantId,
+    this.bankers,
+    this.bankAccountNo,
+    this.bankAccountName,
+    this.bankCode,
+    this.bankName,
   });
 
   factory SignupRetailCustomerRequest.fromJson(Map<String, dynamic> json) =>

@@ -11,7 +11,7 @@ import 'package:hillcrest_finance/features/dashboard/presentation/screens/main_w
 import 'package:hillcrest_finance/features/dashboard/presentation/screens/profile_screen.dart';
 import 'package:hillcrest_finance/features/kyc/kyc_forms/individual_form/individual_personal_information_screen.dart';
 import 'package:hillcrest_finance/features/kyc/kyc_forms/individual_form/individual_kyc_upload_document_screen.dart';
-import 'package:hillcrest_finance/features/kyc/kyc_forms/widgets/liveness_check.dart';
+import 'package:hillcrest_finance/features/kyc/kyc_forms/widgets/face_capture.dart';
 import 'package:hillcrest_finance/features/investment/presentation/screens/my_investment_screen.dart';
 import 'package:hillcrest_finance/features/investment/presentation/screens/investment_screen.dart';
 import 'package:hillcrest_finance/features/investment/presentation/screens/portfolio_holdings_screen.dart';
@@ -52,7 +52,7 @@ class AppRouter extends RootStackRouter {
           page: IndividualKycDocumentUploadRoute.page,
           path: '/kyc/upload-documents',
         ),
-        AutoRoute(page: LivenessCheckRoute.page, path: '/liveness-check'),
+        AutoRoute(page: FaceCaptureRoute.page, path: '/face-capture'),
         AutoRoute(
           page: MyInvestmentRoute.page,
           path: '/my-investments',
